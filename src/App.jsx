@@ -89,8 +89,8 @@ export default function App() {
   return (
     <>
       <SplashScreen />
-      <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-8 px-4">
-      <div style={{ maxWidth: 390, padding: '24px 20px 32px' }} className="w-full flex flex-col gap-5">
+      <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-10 px-4">
+      <div style={{ maxWidth: 430, padding: '28px 22px 40px' }} className="w-full flex flex-col gap-6">
 
           {/* 1. Sport selector */}
           <div className="flex gap-2">
@@ -122,7 +122,7 @@ export default function App() {
 
           {/* 2. Distance selector + Location */}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.1em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10 }}>
               Distance
             </div>
             <div className="flex items-center justify-between">
@@ -158,7 +158,7 @@ export default function App() {
           </div>
 
           {/* 4. Verdict card */}
-          <div style={{ background: '#2d4a1e', borderRadius: 20, padding: '18px 18px 20px', position: 'relative' }}>
+          <div style={{ background: '#2d4a1e', borderRadius: 22, padding: '20px 20px 22px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
             <div
               style={{
                 position: 'absolute', top: 14, right: 14,
@@ -196,7 +196,7 @@ export default function App() {
           </div>
 
           {/* 5. Conditions strip */}
-          <div style={{ background: '#ffffff', borderRadius: 16, padding: '14px 12px' }}>
+          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
             <div className="grid grid-cols-4 gap-1 text-center">
               {[
                 { icon: '🌡️', value: '74°F',   label: 'Temp'       },
@@ -215,7 +215,7 @@ export default function App() {
 
           {/* 6. Trail tips */}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.1em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
               Trail tips
             </div>
             <div className="flex flex-col gap-2">
@@ -224,7 +224,7 @@ export default function App() {
                 'UV index is high. Bring sunscreen and extra water for exposed sections.',
                 'Sunset at 7:51pm. Plenty of daylight, no rush on your start time.',
               ].map((tip, i) => (
-                <div key={i} style={{ background: '#ffffff', borderRadius: 14, padding: '12px 14px' }} className="flex items-start gap-3">
+                <div key={i} style={{ background: '#ffffff', borderRadius: 16, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }} className="flex items-start gap-3">
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5a7a3a', flexShrink: 0, marginTop: 5 }} />
                   <span style={{ fontSize: 13, color: '#3a3a2e', lineHeight: 1.5 }}>{tip}</span>
                 </div>
@@ -234,7 +234,7 @@ export default function App() {
 
           {/* 7. Week strip */}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.1em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
               This week
             </div>
             <div className="grid grid-cols-7 gap-1">
@@ -243,9 +243,10 @@ export default function App() {
                   key={day}
                   style={{
                     background: active ? '#2d4a1e' : '#ffffff',
-                    borderRadius: 12,
-                    padding: '10px 4px',
+                    borderRadius: 14,
+                    padding: '12px 4px',
                     textAlign: 'center',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
                   }}
                   className="flex flex-col items-center gap-1"
                 >
