@@ -413,10 +413,12 @@ export default function App() {
   const [airQuality,     setAirQuality]     = useState(null)
   const [dailyForecast,  setDailyForecast]  = useState([])
   const [sunTimes,       setSunTimes]       = useState([])
+  const [refreshing,     setRefreshing]     = useState(false)
+  const lastFetchRef = useRef(null)
 
+  // GPS + reverse geocode on mount
   useEffect(() => {
     if (!navigator.geolocation) { setLocationName('Location unavailable'); return }
-
     navigator.geolocation.getCurrentPosition(
       async ({ coords: { latitude, longitude } }) => {
         setCoords({ latitude, longitude })
@@ -439,13 +441,13 @@ export default function App() {
     )
   }, [])
 
-  useEffect(() => {
-    if (!coords) return
+  // Shared fetch function — weather + sun in parallel
+  const fetchWeatherData = async (lat, lon) => {
     const apiKey = import.meta.env.VITE_TOMORROW_API_KEY
     if (!apiKey) return
-    const { latitude: lat, longitude: lon } = coords
 
     setWeatherLoading(true)
+    lastFetchRef.current = Date.now()
 
     const weatherFetch = fetch(
       `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
@@ -455,41 +457,82 @@ export default function App() {
       `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=7`
     ).then(r => r.json())
 
-    Promise.allSettled([weatherFetch, sunFetch])
-      .then(([weatherResult, sunResult]) => {
-        if (weatherResult.status === 'fulfilled') {
-          const timelines = weatherResult.value?.data?.timelines ?? []
-          const hourly = timelines.find(t => t.timestep === '1h')
-          const daily  = timelines.find(t => t.timestep === '1d')
+    const [weatherResult, sunResult] = await Promise.allSettled([weatherFetch, sunFetch])
 
-          const cur = hourly?.intervals?.[0]?.values ?? {}
-          setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
-          setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
-          setAirQuality(epaLabel(cur.epaIndex))
+    if (weatherResult.status === 'fulfilled') {
+      const timelines = weatherResult.value?.data?.timelines ?? []
+      const hourly = timelines.find(t => t.timestep === '1h')
+      const daily  = timelines.find(t => t.timestep === '1d')
+      const cur = hourly?.intervals?.[0]?.values ?? {}
+      setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
+      setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
+      setAirQuality(epaLabel(cur.epaIndex))
+      const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
+        day:     dayAbbr(interval.startTime),
+        tempMax: interval.values?.temperatureMax != null
+                  ? Math.round(interval.values.temperatureMax) : null,
+      }))
+      setDailyForecast(days)
+    } else {
+      setCurrentTemp(null); setCurrentHumidity(null)
+      setAirQuality(null);  setDailyForecast([])
+    }
 
-          const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
-            day:     dayAbbr(interval.startTime),
-            tempMax: interval.values?.temperatureMax != null
-                      ? Math.round(interval.values.temperatureMax)
-                      : null,
-          }))
-          setDailyForecast(days)
-        } else {
-          setCurrentTemp(null); setCurrentHumidity(null)
-          setAirQuality(null);  setDailyForecast([])
-        }
+    if (sunResult.status === 'fulfilled') {
+      const d = sunResult.value?.daily ?? {}
+      setSunTimes((d.sunrise ?? []).map((rise, i) => ({ sunrise: rise, sunset: d.sunset?.[i] })))
+    } else {
+      setSunTimes([])
+    }
 
-        if (sunResult.status === 'fulfilled') {
-          const d = sunResult.value?.daily ?? {}
-          const rises  = d.sunrise ?? []
-          const sets   = d.sunset  ?? []
-          setSunTimes(rises.map((rise, i) => ({ sunrise: rise, sunset: sets[i] })))
-        } else {
-          setSunTimes([])
-        }
-      })
-      .finally(() => setWeatherLoading(false))
-  }, [coords])
+    setWeatherLoading(false)
+  }
+
+  // Fetch when coords change
+  useEffect(() => {
+    if (!coords) return
+    fetchWeatherData(coords.latitude, coords.longitude)
+  }, [coords]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Manual refresh
+  const handleRefresh = async () => {
+    if (!coords || refreshing) return
+    setRefreshing(true)
+    try {
+      const [, ] = await Promise.allSettled([
+        // Re-reverse-geocode to freshen location name
+        fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}&format=json`,
+          { headers: NOMINATIM_HEADERS }
+        ).then(r => r.json()).then(data => {
+          const addr = data.address ?? {}
+          const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? ''
+          const abbr = usStateAbbr[addr.state ?? ''] ?? addr.state ?? ''
+          const name = city && abbr ? `${city}, ${abbr}` : city || abbr || 'Unknown location'
+          setLocationName(name)
+          if (!gpsLocationName) setGpsLocationName(name)
+        }).catch(() => {}),
+        fetchWeatherData(coords.latitude, coords.longitude),
+      ])
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  // Auto-refresh on visibility change if stale > 30 min
+  useEffect(() => {
+    const THIRTY_MIN = 30 * 60 * 1000
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!coords) return
+      if (!lastFetchRef.current) return
+      if (Date.now() - lastFetchRef.current > THIRTY_MIN) {
+        fetchWeatherData(coords.latitude, coords.longitude)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [coords]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectLocation = r => {
     setCoords({ latitude: parseFloat(r.lat), longitude: parseFloat(r.lon) })
@@ -516,17 +559,33 @@ export default function App() {
               <PinIcon color="#5a7a3a" />
               <span style={{ fontSize: 16, fontWeight: 600, color: '#2c2c1e', fontFamily: "'DM Sans', sans-serif" }}>{locationName}</span>
             </button>
-            <button
-              onClick={() => setSheetOpen(true)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-              aria-label="Open settings"
-            >
-              <svg width="22" height="18" viewBox="0 0 22 18" fill="none">
-                <rect y="0"    width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                <rect y="7.75" width="16" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                <rect y="15.5" width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-              </svg>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                style={{ background: 'none', border: 'none', cursor: refreshing ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                aria-label="Refresh"
+              >
+                <svg
+                  width="18" height="18" viewBox="0 0 18 18" fill="none"
+                  style={{ animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }}
+                >
+                  <path d="M15.75 9A6.75 6.75 0 1 1 9.53 2.27L11.25 4" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M9 1.5v3h3" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+              <button
+                onClick={() => setSheetOpen(true)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                aria-label="Open settings"
+              >
+                <svg width="22" height="18" viewBox="0 0 22 18" fill="none">
+                  <rect y="0"    width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
+                  <rect y="7.75" width="16" height="2.5" rx="1.25" fill="#2d4a1e"/>
+                  <rect y="15.5" width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
+                </svg>
+              </button>
+            </div>
           </header>
 
           {/* Verdict card */}
