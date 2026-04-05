@@ -1,7 +1,11 @@
 @import "tailwindcss";
 
-html, body {
-  background: #ffffff;
+html {
+  background-color: #f5f2eb;
+}
+
+body {
+  background-color: #f5f2eb;
 }
 
 input, textarea, select {
