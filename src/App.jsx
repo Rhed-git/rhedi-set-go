@@ -418,6 +418,7 @@ export default function App() {
   const [dailyForecast,  setDailyForecast]  = useState([])
   const [sunTimes,       setSunTimes]       = useState([])
   const [refreshing,     setRefreshing]     = useState(false)
+  const [refreshPhase,   setRefreshPhase]   = useState('idle') // 'idle' | 'updating' | 'done'
   const lastFetchRef = useRef(null)
 
   // GPS + reverse geocode on mount
@@ -502,6 +503,7 @@ export default function App() {
   const handleRefresh = async () => {
     if (!coords || refreshing) return
     setRefreshing(true)
+    setRefreshPhase('updating')
     try {
       const [, ] = await Promise.allSettled([
         // Re-reverse-geocode to freshen location name
@@ -520,6 +522,8 @@ export default function App() {
       ])
     } finally {
       setRefreshing(false)
+      setRefreshPhase('done')
+      setTimeout(() => setRefreshPhase('idle'), 2000)
     }
   }
 
@@ -556,6 +560,20 @@ export default function App() {
 
           {/* Header */}
           <header className="flex items-center justify-between">
+            {/* Left: menu button */}
+            <button
+              onClick={() => setSheetOpen(true)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+              aria-label="Open settings"
+            >
+              <svg width="22" height="18" viewBox="0 0 22 18" fill="none">
+                <rect y="0"    width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
+                <rect y="7.75" width="16" height="2.5" rx="1.25" fill="#2d4a1e"/>
+                <rect y="15.5" width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
+              </svg>
+            </button>
+
+            {/* Center: location name */}
             <button
               onClick={() => setSheetOpen(true)}
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 6 }}
@@ -563,33 +581,33 @@ export default function App() {
               <PinIcon color="#5a7a3a" />
               <span style={{ fontSize: 16, fontWeight: 600, color: '#2c2c1e', fontFamily: "'DM Sans', sans-serif" }}>{locationName}</span>
             </button>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                style={{ background: 'none', border: 'none', cursor: refreshing ? 'default' : 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-                aria-label="Refresh"
-              >
+
+            {/* Right: refresh button with feedback */}
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              style={{ background: 'none', border: 'none', cursor: refreshing ? 'default' : 'pointer', padding: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 40 }}
+              aria-label="Refresh"
+            >
+              {refreshPhase === 'done' ? (
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M3 9.5l4 4 8-8" stroke="#5a7a3a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              ) : (
                 <svg
                   width="18" height="18" viewBox="0 0 18 18" fill="none"
-                  style={{ animation: refreshing ? 'spin 0.8s linear infinite' : 'none' }}
+                  style={{ animation: refreshPhase === 'updating' ? 'spin 0.8s linear infinite' : 'none' }}
                 >
                   <path d="M15.75 9A6.75 6.75 0 1 1 9.53 2.27L11.25 4" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
                   <path d="M9 1.5v3h3" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
-              </button>
-              <button
-                onClick={() => setSheetOpen(true)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-                aria-label="Open settings"
-              >
-                <svg width="22" height="18" viewBox="0 0 22 18" fill="none">
-                  <rect y="0"    width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                  <rect y="7.75" width="16" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                  <rect y="15.5" width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                </svg>
-              </button>
-            </div>
+              )}
+              {refreshPhase !== 'idle' && (
+                <span style={{ fontSize: 10, color: '#8a8475', fontFamily: "'DM Sans', sans-serif", lineHeight: 1 }}>
+                  {refreshPhase === 'updating' ? 'Updating…' : 'Updated'}
+                </span>
+              )}
+            </button>
           </header>
 
           {/* Verdict card */}
