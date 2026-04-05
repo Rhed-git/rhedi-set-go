@@ -360,6 +360,37 @@ function epaIsGood(label) {
   return label === 'Good'
 }
 
+function formatTime(isoString) {
+  // isoString from Open-Meteo is like "2026-04-05T06:42"
+  const d = new Date(isoString)
+  let h = d.getHours(), m = d.getMinutes()
+  const ampm = h >= 12 ? 'pm' : 'am'
+  h = h % 12 || 12
+  return `${h}:${String(m).padStart(2, '0')}${ampm}`
+}
+
+function sunDisplay(sunTimes) {
+  // Returns { icon, value, label } for the conditions strip
+  if (!sunTimes?.length) return { icon: '🌅', value: '--', label: 'Sunset' }
+  const now = new Date()
+  const today = sunTimes[0]
+  const rise  = new Date(today.sunrise)
+  const set   = new Date(today.sunset)
+
+  if (now < rise) {
+    return { icon: '🌄', value: formatTime(today.sunrise), label: 'Sunrise' }
+  }
+  if (now < set) {
+    return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
+  }
+  // After sunset — show tomorrow's sunrise if available
+  const tomorrow = sunTimes[1]
+  if (tomorrow) {
+    return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Tmrw sunrise' }
+  }
+  return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusDot({ status }) {
@@ -381,6 +412,7 @@ export default function App() {
   const [currentHumidity,setCurrentHumidity]= useState(null)
   const [airQuality,     setAirQuality]     = useState(null)
   const [dailyForecast,  setDailyForecast]  = useState([])
+  const [sunTimes,       setSunTimes]       = useState([])
 
   useEffect(() => {
     if (!navigator.geolocation) { setLocationName('Location unavailable'); return }
@@ -415,33 +447,46 @@ export default function App() {
 
     setWeatherLoading(true)
 
-    fetch(
+    const weatherFetch = fetch(
       `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
-    )
-      .then(r => r.json())
-      .then(data => {
-        const timelines = data?.data?.timelines ?? []
-        const hourly = timelines.find(t => t.timestep === '1h')
-        const daily  = timelines.find(t => t.timestep === '1d')
+    ).then(r => r.json())
 
-        const now = hourly?.intervals?.[0]?.values ?? {}
-        setCurrentTemp(now.temperature != null ? Math.round(now.temperature) : null)
-        setCurrentHumidity(now.humidity   != null ? Math.round(now.humidity)   : null)
-        setAirQuality(epaLabel(now.epaIndex))
+    const sunFetch = fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=7`
+    ).then(r => r.json())
 
-        const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
-          day:     dayAbbr(interval.startTime),
-          tempMax: interval.values?.temperatureMax != null
-                    ? Math.round(interval.values.temperatureMax)
-                    : null,
-        }))
-        setDailyForecast(days)
-      })
-      .catch(() => {
-        setCurrentTemp(null)
-        setCurrentHumidity(null)
-        setAirQuality(null)
-        setDailyForecast([])
+    Promise.allSettled([weatherFetch, sunFetch])
+      .then(([weatherResult, sunResult]) => {
+        if (weatherResult.status === 'fulfilled') {
+          const timelines = weatherResult.value?.data?.timelines ?? []
+          const hourly = timelines.find(t => t.timestep === '1h')
+          const daily  = timelines.find(t => t.timestep === '1d')
+
+          const cur = hourly?.intervals?.[0]?.values ?? {}
+          setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
+          setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
+          setAirQuality(epaLabel(cur.epaIndex))
+
+          const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
+            day:     dayAbbr(interval.startTime),
+            tempMax: interval.values?.temperatureMax != null
+                      ? Math.round(interval.values.temperatureMax)
+                      : null,
+          }))
+          setDailyForecast(days)
+        } else {
+          setCurrentTemp(null); setCurrentHumidity(null)
+          setAirQuality(null);  setDailyForecast([])
+        }
+
+        if (sunResult.status === 'fulfilled') {
+          const d = sunResult.value?.daily ?? {}
+          const rises  = d.sunrise ?? []
+          const sets   = d.sunset  ?? []
+          setSunTimes(rises.map((rise, i) => ({ sunrise: rise, sunset: sets[i] })))
+        } else {
+          setSunTimes([])
+        }
       })
       .finally(() => setWeatherLoading(false))
   }, [coords])
@@ -516,12 +561,15 @@ export default function App() {
           {/* Conditions strip */}
           <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)', opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
             <div className="grid grid-cols-4 gap-1 text-center">
-              {[
-                { icon: '🌡️', value: currentTemp    != null ? `${currentTemp}°F`  : '--', label: 'Temp'     },
-                { icon: '💧', value: currentHumidity != null ? `${currentHumidity}%` : '--', label: 'Humidity' },
-                { icon: '🌅', value: '7:51pm',                                               label: 'Sunset'   },
-                { icon: '🌿', value: airQuality ?? '--', label: 'Air', green: epaIsGood(airQuality) },
-              ].map(({ icon, value, label, green }) => (
+              {(() => {
+                const sun = sunDisplay(sunTimes)
+                return [
+                  { icon: '🌡️', value: currentTemp     != null ? `${currentTemp}°F`    : '--', label: 'Temp'     },
+                  { icon: '💧', value: currentHumidity  != null ? `${currentHumidity}%` : '--', label: 'Humidity' },
+                  { icon: sun.icon, value: sun.value, label: sun.label },
+                  { icon: '🌿', value: airQuality ?? '--', label: 'Air', green: epaIsGood(airQuality) },
+                ]
+              })().map(({ icon, value, label, green }) => (
                 <div key={label} className="flex flex-col items-center gap-1">
                   <span style={{ fontSize: 18 }}>{icon}</span>
                   <span style={{ fontSize: 13, fontWeight: 600, color: green ? '#5a7a3a' : '#2c2c1e' }}>{value}</span>
