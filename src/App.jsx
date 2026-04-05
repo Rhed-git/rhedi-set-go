@@ -21,20 +21,7 @@ export default function App() {
     <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-8 px-4">
       <div style={{ maxWidth: 390, padding: '24px 20px 32px' }} className="w-full flex flex-col gap-5">
 
-          {/* 1. Header */}
-          <header className="flex items-center justify-between">
-            <h1 style={{ fontFamily: "'DM Serif Display', serif", fontSize: 24, color: '#2c2c1e', lineHeight: 1 }}>
-              Rhedi<span style={{ color: '#5a7a3a' }}>Set</span>Go
-            </h1>
-            <div className="flex items-center gap-1" style={{ color: '#2c2c1e', fontSize: 13 }}>
-              <svg width="13" height="16" viewBox="0 0 13 16" fill="none">
-                <path d="M6.5 0C3.186 0 .5 2.686.5 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.314-2.686-6-6-6zm0 8.5A2.5 2.5 0 1 1 6.5 3.5 2.5 2.5 0 0 1 6.5 8.5z" fill="#5a7a3a"/>
-              </svg>
-              <span style={{ fontWeight: 500 }}>Yorktown, VA</span>
-            </div>
-          </header>
-
-          {/* 2. Sport selector */}
+          {/* 1. Sport selector */}
           <div className="flex gap-2">
             {[
               { label: 'MTB',   active: true  },
@@ -62,32 +49,40 @@ export default function App() {
             ))}
           </div>
 
-          {/* 3. Distance selector */}
+          {/* 2. Distance selector + Location */}
           <div>
             <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.1em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 8 }}>
               Distance
             </div>
-            <div className="flex gap-2">
-              {[
-                { label: '10 mi', active: false },
-                { label: '25 mi', active: true  },
-                { label: '50 mi', active: false },
-              ].map(({ label, active }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: active ? '#1e3a5a' : 'transparent',
-                    color: active ? '#b5d4f4' : '#5c5a50',
-                    border: active ? 'none' : '1px solid #c8c3b8',
-                    borderRadius: 999,
-                    fontSize: 13,
-                    fontWeight: 500,
-                    padding: '6px 18px',
-                  }}
-                >
-                  {label}
-                </div>
-              ))}
+            <div className="flex items-center justify-between">
+              <div className="flex gap-2">
+                {[
+                  { label: '10 mi', active: false },
+                  { label: '25 mi', active: true  },
+                  { label: '50 mi', active: false },
+                ].map(({ label, active }) => (
+                  <div
+                    key={label}
+                    style={{
+                      background: active ? '#1e3a5a' : 'transparent',
+                      color: active ? '#b5d4f4' : '#5c5a50',
+                      border: active ? 'none' : '1px solid #c8c3b8',
+                      borderRadius: 999,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      padding: '6px 18px',
+                    }}
+                  >
+                    {label}
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-1" style={{ color: '#2c2c1e', fontSize: 13 }}>
+                <svg width="13" height="16" viewBox="0 0 13 16" fill="none">
+                  <path d="M6.5 0C3.186 0 .5 2.686.5 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.314-2.686-6-6-6zm0 8.5A2.5 2.5 0 1 1 6.5 3.5 2.5 2.5 0 0 1 6.5 8.5z" fill="#5a7a3a"/>
+                </svg>
+                <span style={{ fontWeight: 500 }}>Yorktown, VA</span>
+              </div>
             </div>
           </div>
 
