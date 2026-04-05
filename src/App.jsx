@@ -340,6 +340,26 @@ function BottomSheet({ open, onClose, locationName, gpsCoords, onSelectLocation,
   )
 }
 
+// ─── Weather helpers ──────────────────────────────────────────────────────────
+
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function dayAbbr(isoString) {
+  return DAY_ABBR[new Date(isoString).getDay()]
+}
+
+function epaLabel(idx) {
+  if (idx == null) return '--'
+  if (idx <= 50)   return 'Good'
+  if (idx <= 100)  return 'Moderate'
+  if (idx <= 150)  return 'Poor'
+  return 'Very Poor'
+}
+
+function epaIsGood(label) {
+  return label === 'Good'
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusDot({ status }) {
@@ -355,6 +375,12 @@ export default function App() {
   const [locationName,    setLocationName]    = useState('Locating...')
   const [gpsLocationName, setGpsLocationName] = useState(null)
   const [sheetOpen,       setSheetOpen]       = useState(false)
+
+  const [weatherLoading, setWeatherLoading] = useState(false)
+  const [currentTemp,    setCurrentTemp]    = useState(null)
+  const [currentHumidity,setCurrentHumidity]= useState(null)
+  const [airQuality,     setAirQuality]     = useState(null)
+  const [dailyForecast,  setDailyForecast]  = useState([])
 
   useEffect(() => {
     if (!navigator.geolocation) { setLocationName('Location unavailable'); return }
@@ -380,6 +406,45 @@ export default function App() {
       { timeout: 10000 }
     )
   }, [])
+
+  useEffect(() => {
+    if (!coords) return
+    const apiKey = import.meta.env.VITE_TOMORROW_API_KEY
+    if (!apiKey) return
+    const { latitude: lat, longitude: lon } = coords
+
+    setWeatherLoading(true)
+
+    fetch(
+      `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
+    )
+      .then(r => r.json())
+      .then(data => {
+        const timelines = data?.data?.timelines ?? []
+        const hourly = timelines.find(t => t.timestep === '1h')
+        const daily  = timelines.find(t => t.timestep === '1d')
+
+        const now = hourly?.intervals?.[0]?.values ?? {}
+        setCurrentTemp(now.temperature != null ? Math.round(now.temperature) : null)
+        setCurrentHumidity(now.humidity   != null ? Math.round(now.humidity)   : null)
+        setAirQuality(epaLabel(now.epaIndex))
+
+        const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
+          day:     dayAbbr(interval.startTime),
+          tempMax: interval.values?.temperatureMax != null
+                    ? Math.round(interval.values.temperatureMax)
+                    : null,
+        }))
+        setDailyForecast(days)
+      })
+      .catch(() => {
+        setCurrentTemp(null)
+        setCurrentHumidity(null)
+        setAirQuality(null)
+        setDailyForecast([])
+      })
+      .finally(() => setWeatherLoading(false))
+  }, [coords])
 
   const handleSelectLocation = r => {
     setCoords({ latitude: parseFloat(r.lat), longitude: parseFloat(r.lon) })
@@ -449,13 +514,13 @@ export default function App() {
           </div>
 
           {/* Conditions strip */}
-          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
+          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)', opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
             <div className="grid grid-cols-4 gap-1 text-center">
               {[
-                { icon: '🌡️', value: '74°F',   label: 'Temp'                },
-                { icon: '💧', value: '52%',    label: 'Humidity'            },
-                { icon: '🌅', value: '7:51pm', label: 'Sunset'              },
-                { icon: '🌿', value: 'Good',   label: 'Air',   green: true  },
+                { icon: '🌡️', value: currentTemp    != null ? `${currentTemp}°F`  : '--', label: 'Temp'     },
+                { icon: '💧', value: currentHumidity != null ? `${currentHumidity}%` : '--', label: 'Humidity' },
+                { icon: '🌅', value: '7:51pm',                                               label: 'Sunset'   },
+                { icon: '🌿', value: airQuality ?? '--', label: 'Air', green: epaIsGood(airQuality) },
               ].map(({ icon, value, label, green }) => (
                 <div key={label} className="flex flex-col items-center gap-1">
                   <span style={{ fontSize: 18 }}>{icon}</span>
@@ -490,22 +555,27 @@ export default function App() {
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
               This week
             </div>
-            <div className="grid grid-cols-7 gap-1">
-              {weekDays.map(({ day, status, temp, active }) => (
-                <div key={day} style={{
-                  background: active ? '#2d4a1e' : '#ffffff',
-                  borderRadius: 14, padding: '12px 4px', textAlign: 'center',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
-                }} className="flex flex-col items-center gap-1">
-                  <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
-                    {day}
-                  </span>
-                  <StatusDot status={status} />
-                  <span style={{ fontSize: 11, fontWeight: 600, color: active ? '#e8f5d0' : '#3a3a2e' }}>
-                    {temp}°
-                  </span>
-                </div>
-              ))}
+            <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
+              {weekDays.map(({ day, status, active }, i) => {
+                const forecast = dailyForecast[i]
+                const displayDay  = forecast?.day  ?? day
+                const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
+                return (
+                  <div key={day} style={{
+                    background: active ? '#2d4a1e' : '#ffffff',
+                    borderRadius: 14, padding: '12px 4px', textAlign: 'center',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+                  }} className="flex flex-col items-center gap-1">
+                    <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
+                      {displayDay}
+                    </span>
+                    <StatusDot status={status} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: active ? '#e8f5d0' : '#3a3a2e' }}>
+                      {displayTemp}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
