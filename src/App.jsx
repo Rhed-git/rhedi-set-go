@@ -213,21 +213,23 @@ function BottomSheet({ open, onClose, locationName, gpsCoords, onSelectLocation,
 
   return (
     <>
-      {/* Overlay */}
+      {/* Overlay — z-index 40 keeps it below the iOS status bar; pointer-events:none
+           prevents it from intercepting status bar touches; clicks on the visible
+           sheet area are handled by the sheet's own close affordance. */}
       <div
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, zIndex: 500,
+          position: 'fixed', inset: 0, zIndex: 40,
           background: 'rgba(0,0,0,0.45)',
           opacity: open ? 1 : 0,
-          pointerEvents: open ? 'auto' : 'none',
+          pointerEvents: 'none',
           transition: 'opacity 300ms ease',
         }}
       />
 
       {/* Sheet */}
       <div style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 501,
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 50,
         background: '#ffffff',
         borderRadius: '24px 24px 0 0',
         padding: '12px 22px 40px',
