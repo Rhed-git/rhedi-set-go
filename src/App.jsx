@@ -1,4 +1,73 @@
+import { useState, useEffect } from 'react'
 import './App.css'
+
+// Timings (ms)
+// 0      — "Rhedi" animates in
+// 600    — "Set" animates in
+// 1200   — "Go" animates in
+// 1600   — slogan fades in  (1200 + 400)
+// 2600   — splash fades out (1600 + 1000)
+// 3200   — removed from DOM (2600 + 600)
+
+function SplashScreen() {
+  const [showSet,    setShowSet]    = useState(false)
+  const [showGo,     setShowGo]     = useState(false)
+  const [showSlogan, setShowSlogan] = useState(false)
+  const [fading,     setFading]     = useState(false)
+  const [gone,       setGone]       = useState(false)
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setShowSet(true),    600)
+    const t2 = setTimeout(() => setShowGo(true),     1200)
+    const t3 = setTimeout(() => setShowSlogan(true), 1600)
+    const t4 = setTimeout(() => setFading(true),     2600)
+    const t5 = setTimeout(() => setGone(true),       3200)
+    return () => [t1, t2, t3, t4, t5].forEach(clearTimeout)
+  }, [])
+
+  if (gone) return null
+
+  const wordStyle = {
+    fontFamily: "'DM Serif Display', serif",
+    fontSize: 56,
+    color: '#f5f2eb',
+    lineHeight: 1.1,
+    textAlign: 'center',
+    animation: 'slideUpFadeIn 0.5s ease forwards',
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: '#2d4a1e',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        opacity: fading ? 0 : 1,
+        transition: 'opacity 0.6s ease',
+        pointerEvents: fading ? 'none' : 'auto',
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+        <span style={wordStyle}>Rhedi</span>
+        {showSet  && <span style={wordStyle}>Set</span>}
+        {showGo   && <span style={wordStyle}>Go</span>}
+      </div>
+      <div
+        style={{
+          fontFamily: "'DM Sans', sans-serif",
+          fontSize: 15,
+          color: '#f5f2eb',
+          opacity: showSlogan ? 0.7 : 0,
+          marginTop: 32,
+          transition: 'opacity 0.5s ease',
+          textAlign: 'center',
+        }}
+      >
+        Less time scrolling, more time rolling.
+      </div>
+    </div>
+  )
+}
 
 const weekDays = [
   { day: 'Sun', status: 'go',      temp: 74, active: true  },
@@ -18,7 +87,9 @@ function StatusDot({ status }) {
 
 export default function App() {
   return (
-    <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-8 px-4">
+    <>
+      <SplashScreen />
+      <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-8 px-4">
       <div style={{ maxWidth: 390, padding: '24px 20px 32px' }} className="w-full flex flex-col gap-5">
 
           {/* 1. Sport selector */}
@@ -192,5 +263,6 @@ export default function App() {
 
       </div>
     </div>
+    </>
   )
 }
