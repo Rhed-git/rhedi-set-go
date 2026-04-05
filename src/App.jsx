@@ -213,13 +213,15 @@ function BottomSheet({ open, onClose, locationName, gpsCoords, onSelectLocation,
 
   return (
     <>
-      {/* Overlay — z-index 40 keeps it below the iOS status bar; pointer-events:none
-           prevents it from intercepting status bar touches; clicks on the visible
-           sheet area are handled by the sheet's own close affordance. */}
+      {/* Overlay — starts below the iOS status bar via safe-area-inset-top so the
+           status bar is never covered or dimmed. pointer-events:none ensures no
+           touch interception; the sheet's Done button handles dismissal. */}
       <div
-        onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, zIndex: 40,
+          position: 'fixed',
+          top: 'env(safe-area-inset-top)',
+          left: 0, right: 0, bottom: 0,
+          zIndex: 40,
           background: 'rgba(0,0,0,0.45)',
           opacity: open ? 1 : 0,
           pointerEvents: 'none',
