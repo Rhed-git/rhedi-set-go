@@ -19,8 +19,7 @@ function StatusDot({ status }) {
 export default function App() {
   return (
     <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-8 px-4">
-      <div style={{ maxWidth: 390, background: '#1a1a14', borderRadius: 36 }} className="w-full overflow-hidden shadow-2xl">
-        <div style={{ background: '#f5f2eb', borderRadius: 32, margin: 6, padding: '24px 20px 32px' }} className="flex flex-col gap-5">
+      <div style={{ maxWidth: 390, padding: '24px 20px 32px' }} className="w-full flex flex-col gap-5">
 
           {/* 1. Header */}
           <header className="flex items-center justify-between">
@@ -196,7 +195,6 @@ export default function App() {
             </div>
           </div>
 
-        </div>
       </div>
     </div>
   )
