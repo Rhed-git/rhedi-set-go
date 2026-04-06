@@ -88,7 +88,7 @@ const NOMINATIM_HEADERS = { 'User-Agent': 'RhediSetGo/1.0' }
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
 const WEATHER_CACHE_KEY = 'rsg_weather_cache'
-const SUN_CACHE_KEY     = 'rsg_daily_cache'   // renamed v2: now also stores Open-Meteo daily weather
+const SUN_CACHE_KEY     = 'rsg_daily_cache_v3' // v3: now also fetches hourly european_aqi from Open-Meteo
 const WEATHER_MAX_AGE   = 30 * 60 * 1000      // 30 min
 const SUN_MAX_AGE       = 6 * 60 * 60 * 1000  // 6 hours
 
@@ -417,6 +417,15 @@ function epaLabel(idx) {
   if (idx <= 50)   return 'Good'
   if (idx <= 100)  return 'Moderate'
   if (idx <= 150)  return 'Poor'
+  return 'Very Poor'
+}
+
+// Maps Open-Meteo european_aqi (0–100+) to the same label set as epaLabel
+function europeanAqiLabel(val) {
+  if (val == null) return null
+  if (val < 40)   return 'Good'
+  if (val < 60)   return 'Moderate'
+  if (val < 80)   return 'Poor'
   return 'Very Poor'
 }
 
@@ -1060,24 +1069,32 @@ export default function App() {
   // Tomorrow.io provides: current conditions + hourly timeline (temp, humidity, precip, weatherCode, epaIndex).
   // Open-Meteo provides:  7-day daily forecast (tempMax, precip, humidity) + sunrise/sunset.
   const applyData = (weatherRaw, sunRaw, timestamp) => {
+    // --- Tomorrow.io: current conditions + hourly timeline ---
+    let epaIndexRaw = null
     if (weatherRaw) {
       const timelines = weatherRaw?.data?.timelines ?? []
+      console.log('[RSG] Tomorrow.io raw response:', JSON.stringify(weatherRaw))
       const current = timelines.find(t => t.timestep === 'current')
       const hourly  = timelines.find(t => t.timestep === '1h')
       const curVals = current?.intervals?.[0]?.values ?? {}
       const cur     = hourly?.intervals?.[0]?.values  ?? {}
+      console.log('[RSG] epaIndex — current timestep:', curVals.epaIndex, '| hourly[0]:', cur.epaIndex)
       setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
       setCurrentHumidity(cur.humidity  != null ? Math.round(cur.humidity)  : null)
-      setAirQuality(epaLabel(curVals.epaIndex ?? cur.epaIndex))
+      epaIndexRaw = curVals.epaIndex ?? cur.epaIndex ?? null
       setWeatherCodeNow(cur.weatherCode ?? null)
       setPrecipIntensityNow(cur.precipitationIntensity ?? 0)
       setHourlyIntervals(hourly?.intervals ?? [])  // full hourly timeline for dryout engine
     } else {
       setCurrentTemp(null); setCurrentHumidity(null)
-      setAirQuality(null);  setHourlyIntervals([])
+      setHourlyIntervals([])
       setWeatherCodeNow(null); setPrecipIntensityNow(0)
     }
 
+    // Prefer Tomorrow.io epaIndex; will fall back to Open-Meteo european_aqi below
+    let aqiLabel = epaIndexRaw != null ? epaLabel(epaIndexRaw) : null
+
+    // --- Open-Meteo: 7-day daily forecast + european_aqi hourly fallback ---
     if (sunRaw) {
       const d = sunRaw?.daily ?? {}
       // Build daily intervals in the same {startTime, values} shape the engine expects,
@@ -1092,14 +1109,17 @@ export default function App() {
         },
       })).slice(0, 7)
 
-      // Log so we can verify 7 rolling days with complete fields
-      console.log('[RSG] Open-Meteo daily — days returned:', rawDaily.length)
-      console.table(rawDaily.map(d => ({
-        date:     d.startTime.slice(0, 10),
-        tempMax:  d.values.temperatureMax            ?? 'MISSING',
-        precip:   d.values.precipitationAccumulation ?? 'MISSING',
-        humidity: d.values.humidity                  ?? 'MISSING',
-      })))
+      // If Tomorrow.io didn't return epaIndex, use Open-Meteo european_aqi for current hour
+      if (aqiLabel == null) {
+        const hourlyTimes = sunRaw?.hourly?.time ?? []
+        const hourlyAqi   = sunRaw?.hourly?.european_aqi ?? []
+        const now = new Date()
+        const pad = n => String(n).padStart(2, '0')
+        const localHourStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:00`
+        const aqiIdx = hourlyTimes.findIndex(t => t === localHourStr)
+        console.log('[RSG] european_aqi fallback — hour:', localHourStr, '| idx:', aqiIdx, '| val:', hourlyAqi[aqiIdx])
+        aqiLabel = europeanAqiLabel(aqiIdx >= 0 ? hourlyAqi[aqiIdx] : null)
+      }
 
       setDailyIntervals(rawDaily)
       setDailyForecast(rawDaily.map(interval => ({
@@ -1114,6 +1134,7 @@ export default function App() {
       setSunTimes([])
     }
 
+    setAirQuality(aqiLabel)  // set once, using best available source
     setCacheTimestamp(timestamp)
     setWeatherLoading(false)
     setSelectedDay(0)  // reset to today whenever new data loads
@@ -1154,7 +1175,7 @@ export default function App() {
     } else {
       try {
         sunRaw = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&forecast_days=7`
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean&hourly=european_aqi&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&forecast_days=7`
         ).then(r => r.json())
         writeCache(SUN_CACHE_KEY, sunRaw, lat, lon)
       } catch {
