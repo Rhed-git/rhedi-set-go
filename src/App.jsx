@@ -85,6 +85,37 @@ const usStateAbbr = {
 
 const NOMINATIM_HEADERS = { 'User-Agent': 'RhediSetGo/1.0' }
 
+// ─── Cache helpers ────────────────────────────────────────────────────────────
+
+const WEATHER_CACHE_KEY = 'rsg_weather_cache'
+const SUN_CACHE_KEY     = 'rsg_sun_cache'
+const WEATHER_MAX_AGE   = 30 * 60 * 1000      // 30 min
+const SUN_MAX_AGE       = 6 * 60 * 60 * 1000  // 6 hours
+
+function readCache(key) {
+  try { return JSON.parse(localStorage.getItem(key) ?? 'null') } catch { return null }
+}
+
+function writeCache(key, data, lat, lon) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now(), location: { lat, lon } }))
+  } catch {}
+}
+
+function cacheIsValid(entry, maxAge, lat, lon) {
+  if (!entry?.timestamp || !entry?.location) return false
+  if (Date.now() - entry.timestamp > maxAge) return false
+  return Math.abs(entry.location.lat - lat) < 0.01 && Math.abs(entry.location.lon - lon) < 0.01
+}
+
+function cacheAgeLabel(timestamp) {
+  if (!timestamp) return ''
+  const mins = Math.round((Date.now() - timestamp) / 60000)
+  if (mins < 1) return 'Updated just now'
+  if (mins === 1) return 'Updated 1 min ago'
+  return `Updated ${mins} min ago`
+}
+
 function formatResult(item) {
   const parts = (item.display_name ?? '').split(',').map(s => s.trim())
   const city  = parts[0] ?? ''
@@ -563,7 +594,8 @@ export default function App() {
   const [sunTimes,         setSunTimes]         = useState([])
   const [refreshing,       setRefreshing]       = useState(false)
   const [refreshPhase,     setRefreshPhase]     = useState('idle') // 'idle' | 'updating' | 'done'
-  const lastFetchRef = useRef(null)
+  const [cacheTimestamp,   setCacheTimestamp]   = useState(null)
+  const [tick,             setTick]             = useState(0) // increments every min to refresh age label
 
   // GPS + reverse geocode on mount
   useEffect(() => {
@@ -590,26 +622,16 @@ export default function App() {
     )
   }, [])
 
-  // Shared fetch function — weather + sun in parallel
-  const fetchWeatherData = async (lat, lon) => {
-    const apiKey = import.meta.env.VITE_TOMORROW_API_KEY
-    if (!apiKey) return
+  // Tick every minute so the "Updated X min ago" label stays current
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60000)
+    return () => clearInterval(id)
+  }, [])
 
-    setWeatherLoading(true)
-    lastFetchRef.current = Date.now()
-
-    const weatherFetch = fetch(
-      `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
-    ).then(r => r.json())
-
-    const sunFetch = fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=7`
-    ).then(r => r.json())
-
-    const [weatherResult, sunResult] = await Promise.allSettled([weatherFetch, sunFetch])
-
-    if (weatherResult.status === 'fulfilled') {
-      const timelines = weatherResult.value?.data?.timelines ?? []
+  // Apply parsed weather + sun data to state
+  const applyData = (weatherRaw, sunRaw, timestamp) => {
+    if (weatherRaw) {
+      const timelines = weatherRaw?.data?.timelines ?? []
       const hourly = timelines.find(t => t.timestep === '1h')
       const daily  = timelines.find(t => t.timestep === '1d')
       const cur = hourly?.intervals?.[0]?.values ?? {}
@@ -630,31 +652,75 @@ export default function App() {
       setAirQuality(null);  setDailyForecast([])
       setDailyIntervals([]); setWeatherCodeNow(null); setPrecipIntensityNow(0)
     }
-
-    if (sunResult.status === 'fulfilled') {
-      const d = sunResult.value?.daily ?? {}
+    if (sunRaw) {
+      const d = sunRaw?.daily ?? {}
       setSunTimes((d.sunrise ?? []).map((rise, i) => ({ sunrise: rise, sunset: d.sunset?.[i] })))
     } else {
       setSunTimes([])
     }
-
+    setCacheTimestamp(timestamp)
     setWeatherLoading(false)
   }
 
-  // Fetch when coords change
+  // Shared fetch — checks cache unless force:true (manual refresh)
+  const fetchWeatherData = async (lat, lon, { force = false } = {}) => {
+    const apiKey = import.meta.env.VITE_TOMORROW_API_KEY
+    if (!apiKey) return
+
+    // --- Weather cache ---
+    const weatherEntry = readCache(WEATHER_CACHE_KEY)
+    let weatherRaw = null
+    let weatherTimestamp = null
+
+    if (!force && cacheIsValid(weatherEntry, WEATHER_MAX_AGE, lat, lon)) {
+      weatherRaw       = weatherEntry.data
+      weatherTimestamp = weatherEntry.timestamp
+    } else {
+      setWeatherLoading(true)
+      try {
+        weatherRaw = await fetch(
+          `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
+        ).then(r => r.json())
+        writeCache(WEATHER_CACHE_KEY, weatherRaw, lat, lon)
+        weatherTimestamp = Date.now()
+      } catch {
+        weatherRaw = null
+      }
+    }
+
+    // --- Sun cache (6 hr expiry; not bypassed by force since it changes so slowly) ---
+    const sunEntry = readCache(SUN_CACHE_KEY)
+    let sunRaw = null
+
+    if (cacheIsValid(sunEntry, SUN_MAX_AGE, lat, lon)) {
+      sunRaw = sunEntry.data
+    } else {
+      try {
+        sunRaw = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=7`
+        ).then(r => r.json())
+        writeCache(SUN_CACHE_KEY, sunRaw, lat, lon)
+      } catch {
+        sunRaw = null
+      }
+    }
+
+    applyData(weatherRaw, sunRaw, weatherTimestamp ?? Date.now())
+  }
+
+  // Fetch when coords change — respects cache
   useEffect(() => {
     if (!coords) return
     fetchWeatherData(coords.latitude, coords.longitude)
   }, [coords]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Manual refresh
+  // Manual refresh — bypasses weather cache
   const handleRefresh = async () => {
     if (!coords || refreshing) return
     setRefreshing(true)
     setRefreshPhase('updating')
     try {
-      const [, ] = await Promise.allSettled([
-        // Re-reverse-geocode to freshen location name
+      await Promise.allSettled([
         fetch(
           `https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}&format=json`,
           { headers: NOMINATIM_HEADERS }
@@ -666,7 +732,7 @@ export default function App() {
           setLocationName(name)
           if (!gpsLocationName) setGpsLocationName(name)
         }).catch(() => {}),
-        fetchWeatherData(coords.latitude, coords.longitude),
+        fetchWeatherData(coords.latitude, coords.longitude, { force: true }),
       ])
     } finally {
       setRefreshing(false)
@@ -675,14 +741,10 @@ export default function App() {
     }
   }
 
-  // Auto-refresh on visibility change if stale > 30 min
+  // Auto-refresh on focus — fetchWeatherData handles cache check internally
   useEffect(() => {
-    const THIRTY_MIN = 30 * 60 * 1000
     const onVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') return
-      if (!coords) return
-      if (!lastFetchRef.current) return
-      if (Date.now() - lastFetchRef.current > THIRTY_MIN) {
+      if (document.visibilityState === 'visible' && coords) {
         fetchWeatherData(coords.latitude, coords.longitude)
       }
     }
@@ -795,7 +857,7 @@ export default function App() {
           </div>
 
           {/* Conditions strip */}
-          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)', opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
+          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px 12px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)', opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
             <div className="grid grid-cols-4 gap-1 text-center">
               {(() => {
                 const sun = sunDisplay(sunTimes)
@@ -813,6 +875,12 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {cacheTimestamp && (
+              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#b8b3a8', fontFamily: "'DM Sans', sans-serif" }}>
+                {/* tick is read here so the label re-evaluates every minute */}
+                {tick >= 0 && cacheAgeLabel(cacheTimestamp)}
+              </div>
+            )}
           </div>
 
           {/* Trail tips */}
