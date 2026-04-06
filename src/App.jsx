@@ -88,8 +88,8 @@ const NOMINATIM_HEADERS = { 'User-Agent': 'RhediSetGo/1.0' }
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
 const WEATHER_CACHE_KEY = 'rsg_weather_cache'
-const SUN_CACHE_KEY     = 'rsg_daily_cache_v4' // v4: removed european_aqi (switched to AQI endpoint)
-const AQI_CACHE_KEY     = 'rsg_aqi_cache'
+const SUN_CACHE_KEY     = 'rsg_daily_cache_v5' // v5: added precip probability, uv_index, wind_speed_10m
+const AQI_CACHE_KEY     = 'rsg_aqi_cache_v2'   // v2: expanded to 7 days for per-day AQI
 const WEATHER_MAX_AGE   = 30 * 60 * 1000      // 30 min
 const AQI_MAX_AGE       = 30 * 60 * 1000      // 30 min
 const SUN_MAX_AGE       = 6 * 60 * 60 * 1000  // 6 hours
@@ -906,27 +906,78 @@ function dryStreakStatus(hrs) {
   return 'Blocking'
 }
 
+function trailMoisture(dryHrs) {
+  if (dryHrs == null) return { value: '--', status: 'Neutral' }
+  if (dryHrs > 48) return { value: 'Dry',           status: 'Ideal' }
+  if (dryHrs > 24) return { value: 'Mostly dry',    status: 'Good' }
+  if (dryHrs > 12) return { value: 'Slightly damp', status: 'Marginal' }
+  return { value: 'Damp', status: 'Blocking' }
+}
+
+function precipProbStatus(prob) {
+  if (prob == null) return 'Neutral'
+  if (prob === 0)  return 'Ideal'
+  if (prob < 10)   return 'Good'
+  if (prob < 30)   return 'Marginal'
+  return 'Blocking'
+}
+
+function uvStatus(val) {
+  if (val == null) return 'Neutral'
+  if (val <= 2)  return 'Neutral'
+  if (val <= 5)  return 'Good'
+  if (val <= 7)  return 'Marginal'
+  return 'Blocking'
+}
+
+function uvLabel(val) {
+  if (val == null) return '--'
+  const n = Math.round(val)
+  if (n <= 2)  return `${n} · Low`
+  if (n <= 5)  return `${n} · Moderate`
+  if (n <= 7)  return `${n} · High`
+  if (n <= 10) return `${n} · Very High`
+  return `${n} · Extreme`
+}
+
+function windStatus(mph) {
+  if (mph == null) return 'Neutral'
+  if (mph < 10)  return 'Neutral'
+  if (mph < 20)  return 'Good'
+  if (mph < 30)  return 'Marginal'
+  return 'Blocking'
+}
+
 // dryStreakHours: optional override for the dry-streak tile (passed for future days
 // from the per-day dryStreakHrs computed in computeVerdict). When null/undefined the
 // function falls back to its original same-day estimation logic.
-function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours }) {
+function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours, uvIndex, windSpeed }) {
   const sun = sunDisplay(sunTimes)
   const precipToday = dailyIntervals[0]?.values?.precipitationAccumulation ?? 0
+  const precipProb  = dailyIntervals[0]?.values?.precipProbability ?? null
   const now = new Date()
   const hourOfDay = now.getHours() + now.getMinutes() / 60
 
-  const sunTile = { icon: sun.icon, name: sun.label, value: sun.value, status: 'Neutral' }
+  const rideWindowTile = { icon: sun.icon, name: 'Ride Window', value: sun.value, status: 'Neutral' }
 
   if (todayVerdict === 'go') {
     // Use precomputed dry streak for future days; fall back to estimate for today
     const dryHrs = dryStreakHours != null ? dryStreakHours : (precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48))
+    const moisture = trailMoisture(dryHrs)
+    const precipValue = precipProb != null
+      ? (precipProb === 0 ? 'Clear' : `${precipProb}% chance rain`)
+      : (precipToday < 0.01 ? 'Clear' : `${precipToday.toFixed(2)}"`)
+    const precipSt = precipProb != null ? precipProbStatus(precipProb) : precipStatus(precipToday)
     return [
-      { icon: '☀️', name: 'Dry Streak', value: `${Math.round(dryHrs)} hrs dry`, status: dryStreakStatus(dryHrs) },
-      { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
-      { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
-      { icon: '🌿', name: 'Air Quality', value: airQuality ?? '--', status: aqiStatus(airQuality) },
-      { icon: '🌤️', name: 'Forecast', value: precipToday < 0.01 ? 'Clear' : `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
-      sunTile,
+      { icon: '🌤️', name: 'Forecast',       value: precipValue,                                                     status: precipSt },
+      { icon: '🌡️', name: 'Temperature',    value: currentTemp     != null ? `${currentTemp}°F` : '--',             status: tempStatus(currentTemp) },
+      { icon: '💧', name: 'Humidity',        value: currentHumidity != null ? `${currentHumidity}%` : '--',         status: humidityStatus(currentHumidity) },
+      { icon: '⏱️', name: 'Dry Streak',      value: `${Math.round(dryHrs)} hrs dry`,                                status: dryStreakStatus(dryHrs) },
+      { icon: '🌱', name: 'Trail Moisture',  value: moisture.value,                                                  status: moisture.status },
+      { icon: '🌿', name: 'Air Quality',     value: airQuality ?? '--',                                              status: aqiStatus(airQuality) },
+      { icon: '🔆', name: 'UV Index',        value: uvLabel(uvIndex),                                                status: uvStatus(uvIndex) },
+      { icon: '💨', name: 'Wind',            value: windSpeed != null ? `${Math.round(windSpeed)} mph` : '--',       status: windStatus(windSpeed) },
+      rideWindowTile,
     ]
   }
 
@@ -946,7 +997,7 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
       { icon: '🌧️', name: 'Rain Timing', value: rainTiming, status: 'Marginal' },
       { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
       { icon: '🌥️', name: 'Forecast', value: `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
-      sunTile,
+      rideWindowTile,
     ]
   }
 
@@ -972,7 +1023,7 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
   } else {
     tiles.push({ icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) })
   }
-  tiles.push(sunTile)
+  tiles.push(rideWindowTile)
 
   return tiles
 }
@@ -988,7 +1039,10 @@ export default function App() {
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [currentTemp,    setCurrentTemp]    = useState(null)
   const [currentHumidity,setCurrentHumidity]= useState(null)
-  const [airQuality,     setAirQuality]     = useState(null)
+  const [airQuality,       setAirQuality]       = useState(null)
+  const [weeklyAqiLabels,  setWeeklyAqiLabels]  = useState([])
+  const [uvIndexNow,       setUvIndexNow]       = useState(null)
+  const [windSpeedNow,     setWindSpeedNow]     = useState(null)
   const [dailyForecast,    setDailyForecast]    = useState([])
   const [dailyIntervals,   setDailyIntervals]   = useState([])
   const [hourlyIntervals,  setHourlyIntervals]  = useState([]) // full hourly timeline for engine
@@ -1076,7 +1130,7 @@ export default function App() {
       setWeatherCodeNow(null); setPrecipIntensityNow(0)
     }
 
-    // --- Open-Meteo AQI: us_aqi for current local hour ---
+    // --- Open-Meteo AQI: us_aqi for current hour (today) + noon of each day (week) ---
     if (aqiRaw) {
       const hourlyTimes = aqiRaw?.hourly?.time ?? []
       const hourlyAqi   = aqiRaw?.hourly?.us_aqi ?? []
@@ -1085,24 +1139,51 @@ export default function App() {
       const localHourStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:00`
       const aqiIdx = hourlyTimes.findIndex(t => t === localHourStr)
       setAirQuality(usAqiLabel(aqiIdx >= 0 ? hourlyAqi[aqiIdx] : hourlyAqi[0] ?? null))
+      // Per-day noon AQI for future-day conditions tiles
+      const weekLabels = Array.from({ length: 7 }, (_, dayOffset) => {
+        const d = new Date()
+        d.setDate(d.getDate() + dayOffset)
+        const noonStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T12:00`
+        const nIdx = hourlyTimes.findIndex(t => t === noonStr)
+        return usAqiLabel(nIdx >= 0 ? hourlyAqi[nIdx] : null)
+      })
+      setWeeklyAqiLabels(weekLabels)
     } else {
       setAirQuality(null)
+      setWeeklyAqiLabels([])
     }
 
-    // --- Open-Meteo: 7-day daily forecast + sunrise/sunset ---
+    // --- Open-Meteo: 7-day daily forecast + sunrise/sunset + hourly UV/wind ---
     if (sunRaw) {
       const d = sunRaw?.daily ?? {}
+      const hourlyTimes = sunRaw?.hourly?.time ?? []
+      const hourlyUV    = sunRaw?.hourly?.uv_index ?? []
+      const hourlyWind  = sunRaw?.hourly?.wind_speed_10m ?? []
+      const now2 = new Date()
+      const pad2 = n => String(n).padStart(2, '0')
+      // Today's current-hour UV and wind
+      const curHourStr = `${now2.getFullYear()}-${pad2(now2.getMonth() + 1)}-${pad2(now2.getDate())}T${pad2(now2.getHours())}:00`
+      const curHIdx = hourlyTimes.findIndex(t => t === curHourStr)
+      setUvIndexNow(curHIdx >= 0 ? hourlyUV[curHIdx] : null)
+      setWindSpeedNow(curHIdx >= 0 ? hourlyWind[curHIdx] : null)
       // Build daily intervals in the same {startTime, values} shape the engine expects,
       // using Open-Meteo arrays. Append T12:00:00 so dayAbbr() parses as local noon,
       // avoiding the UTC-midnight off-by-one-day issue with date-only strings.
-      const rawDaily = (d.time ?? []).map((date, i) => ({
-        startTime: `${date}T12:00:00`,
-        values: {
-          temperatureMax:            d.temperature_2m_max?.[i]          ?? null,
-          precipitationAccumulation: d.precipitation_sum?.[i]           ?? null,
-          humidity:                  d.relative_humidity_2m_mean?.[i]   ?? null,
-        },
-      })).slice(0, 7)
+      const rawDaily = (d.time ?? []).map((date, i) => {
+        const noonStr = `${date}T12:00`
+        const noonIdx = hourlyTimes.findIndex(t => t === noonStr)
+        return {
+          startTime: `${date}T12:00:00`,
+          values: {
+            temperatureMax:            d.temperature_2m_max?.[i]             ?? null,
+            precipitationAccumulation: d.precipitation_sum?.[i]              ?? null,
+            humidity:                  d.relative_humidity_2m_mean?.[i]      ?? null,
+            precipProbability:         d.precipitation_probability_max?.[i]  ?? null,
+            uvIndex:                   noonIdx >= 0 ? hourlyUV[noonIdx]      : null,
+            windSpeed:                 noonIdx >= 0 ? hourlyWind[noonIdx]    : null,
+          },
+        }
+      }).slice(0, 7)
 
       setDailyIntervals(rawDaily)
       setDailyForecast(rawDaily.map(interval => ({
@@ -1115,6 +1196,8 @@ export default function App() {
       setDailyIntervals([])
       setDailyForecast([])
       setSunTimes([])
+      setUvIndexNow(null)
+      setWindSpeedNow(null)
     }
 
     setCacheTimestamp(timestamp)
@@ -1157,7 +1240,7 @@ export default function App() {
     } else {
       try {
         sunRaw = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&forecast_days=7`
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean,precipitation_probability_max&hourly=uv_index,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7`
         ).then(r => r.json())
         writeCache(SUN_CACHE_KEY, sunRaw, lat, lon)
       } catch {
@@ -1174,7 +1257,7 @@ export default function App() {
     } else {
       try {
         aqiRaw = await fetch(
-          `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi&timezone=auto&forecast_days=1`
+          `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&hourly=us_aqi&timezone=auto&forecast_days=7`
         ).then(r => r.json())
         writeCache(AQI_CACHE_KEY, aqiRaw, lat, lon)
       } catch {
@@ -1437,12 +1520,14 @@ export default function App() {
                 currentHumidity:  selectedDay === 0 ? currentHumidity
                                   : (dailyIntervals[selectedDay]?.values?.humidity != null
                                       ? Math.round(dailyIntervals[selectedDay].values.humidity) : null),
-                airQuality:       selectedDay === 0 ? airQuality : 'N/A',
+                airQuality:       selectedDay === 0 ? airQuality : (weeklyAqiLabels[selectedDay] ?? 'N/A'),
                 // Slice sunTimes so sunDisplay always reads index [0] as the selected day
                 sunTimes:         sunTimes.slice(selectedDay),
                 precipIntensityNow: selectedDay === 0 ? precipIntensityNow : 0,
                 // Pass precomputed dry streak so future-day tiles show accurate values
                 dryStreakHours:   verdict?.weekDryStreakHrs?.[selectedDay] ?? null,
+                uvIndex:          selectedDay === 0 ? uvIndexNow   : (dailyIntervals[selectedDay]?.values?.uvIndex   ?? null),
+                windSpeed:        selectedDay === 0 ? windSpeedNow : (dailyIntervals[selectedDay]?.values?.windSpeed ?? null),
               }).map(({ icon, name, value, status }) => (
                 <div key={name} style={{
                   background: '#ffffff',
