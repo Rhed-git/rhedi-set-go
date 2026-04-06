@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import './App.css'
 
 // Splash timing (ms):
@@ -61,15 +61,13 @@ function SplashScreen() {
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
-const weekDays = [
-  { day: 'Sun', status: 'go',      temp: 74, active: true  },
-  { day: 'Mon', status: 'go',      temp: 71, active: false },
-  { day: 'Tue', status: 'caution', temp: 68, active: false },
-  { day: 'Wed', status: 'nogo',    temp: 61, active: false },
-  { day: 'Thu', status: 'nogo',    temp: 58, active: false },
-  { day: 'Fri', status: 'caution', temp: 65, active: false },
-  { day: 'Sat', status: 'go',      temp: 72, active: false },
-]
+// Dynamic today label — computed once per session
+const TODAY_LABEL = (() => {
+  const d = new Date()
+  const days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${days[d.getDay()]} · ${months[d.getMonth()]} ${d.getDate()}`
+})()
 
 const usStateAbbr = {
   'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
@@ -403,6 +401,149 @@ function StatusDot({ status }) {
   return                           <span style={{ color: '#c0392b' }} className="text-lg">✕</span>
 }
 
+// ─── Decision Engine ──────────────────────────────────────────────────────────
+
+// Tomorrow.io weather codes that indicate active precipitation
+const RAIN_CODES = new Set([4000, 4001, 4200, 4201, 6000, 6001, 6200, 6201, 8000])
+
+function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes }) {
+  const now = new Date()
+
+  // --- Extract per-day precipitation from daily intervals ---
+  const weekPrecip = dailyIntervals.map(d => d?.values?.precipitationAccumulation ?? 0)
+  const precipToday = weekPrecip[0] ?? 0
+
+  // --- Today's verdict — first match wins ---
+  let todayVerdict = 'go'
+  let todayReason  = ''
+
+  // 1. Frozen
+  if (currentTemp != null && currentTemp < 32) {
+    todayVerdict = 'nogo'
+    todayReason  = `Frozen at ${currentTemp}°F. Wait for temps to rise above freezing before riding.`
+  }
+  // 2. Actively raining right now
+  else if (precipIntensityNow > 0.1 || RAIN_CODES.has(weatherCodeNow)) {
+    todayVerdict = 'nogo'
+    todayReason  = 'Rain falling right now. Riding will damage wet trails — sit this one out.'
+  }
+  // 3. Significant rain in today's window (past or forecast)
+  else if (precipToday > 0.1) {
+    const dryoutHrs      = precipToday * 24
+    // Estimate hours elapsed since rain: if it's currently dry, assume rain peaked a few hours ago
+    const hourOfDay      = now.getHours() + now.getMinutes() / 60
+    const estHrsSinceRain = Math.max(1, hourOfDay - 2)
+    const cautionStart   = dryoutHrs * 0.75
+
+    if (estHrsSinceRain < cautionStart) {
+      todayVerdict = 'nogo'
+      const hoursLeft = Math.ceil(dryoutHrs - estHrsSinceRain)
+      todayReason = `${precipToday.toFixed(2)}" of rain today. Trails need ~${hoursLeft} more hours to dry.`
+    } else if (estHrsSinceRain < dryoutHrs) {
+      todayVerdict = 'caution'
+      todayReason = `${precipToday.toFixed(2)}" of rain today. Trails may be soft in spots — ride with care.`
+    }
+    // else falls through to GO (dryout complete)
+  }
+  // 4. Light rain today (trace amounts)
+  else if (precipToday >= 0.05) {
+    todayVerdict = 'caution'
+    todayReason  = `Light rain (${precipToday.toFixed(2)}") in today's forecast. Conditions may soften later.`
+  }
+  // 5. High humidity caution (muggy after recent moisture)
+  else if (currentHumidity != null && currentHumidity > 85) {
+    todayVerdict = 'caution'
+    todayReason  = `High humidity at ${currentHumidity}%. Trails may feel tacky or slow in low-lying areas.`
+  }
+
+  // 6. GO — build a descriptive reason
+  if (todayVerdict === 'go') {
+    if (currentTemp != null && currentHumidity != null) {
+      if (currentHumidity < 50) {
+        todayReason = `${currentTemp}°F and ${currentHumidity}% humidity. Dry, firm conditions — fast trails today.`
+      } else {
+        todayReason = `${currentTemp}°F with no rain in forecast. Trail conditions look solid.`
+      }
+    } else {
+      todayReason = 'No rain in forecast. Trail conditions look solid.'
+    }
+  }
+
+  // --- 7-day verdicts ---
+  const weekVerdicts = weekPrecip.map((precip, i) => {
+    if (i === 0) return todayVerdict
+
+    const prevPrecip = weekPrecip[i - 1]
+
+    if (precip > 0.1)  return 'nogo'
+    if (precip >= 0.05) return 'caution'
+
+    // Dryout from previous day's rain — assume ~24 hrs elapsed between day midpoints
+    if (prevPrecip > 0.1) {
+      const dryoutHrs = prevPrecip * 24
+      if (dryoutHrs > 18) return 'nogo'    // > 0.75" prev day: still drying
+      return 'caution'                      // lighter rain prev day: probably soft
+    }
+
+    // Check two days back for heavy rain (> 1" needs 24+ hrs)
+    if (i >= 2 && weekPrecip[i - 2] > 1.0) {
+      const dryoutHrs = weekPrecip[i - 2] * 24
+      if (48 < dryoutHrs) return 'caution'
+    }
+
+    return 'go'
+  })
+
+  // --- Tips ---
+  const sun  = sunDisplay(sunTimes)
+  const tips = []
+
+  if (todayVerdict === 'go') {
+    // Tip 1: temperature
+    if (currentTemp != null) {
+      if (currentTemp >= 85)      tips.push(`Hot at ${currentTemp}°F. Bring extra water and plan for shaded rest stops.`)
+      else if (currentTemp <= 45) tips.push(`Cold at ${currentTemp}°F. Layer up and warm up gradually before pushing hard.`)
+      else                        tips.push(`${currentTemp}°F with firm conditions. Great day to push pace on hardpack.`)
+    } else {
+      tips.push('Check local trail conditions before heading out.')
+    }
+
+    // Tip 2: humidity
+    if (currentHumidity != null) {
+      if (currentHumidity > 70) tips.push(`Humidity at ${currentHumidity}% — trails may feel tacky. Great for grip on corners.`)
+      else                      tips.push(`Low humidity at ${currentHumidity}% — expect dusty, fast conditions on exposed sections.`)
+    } else {
+      tips.push('Check local trail reports for current surface conditions.')
+    }
+
+    // Tip 3: sunset/sunrise timing
+    if (sun.label === 'Sunset')       tips.push(`Sunset at ${sun.value}. Plenty of daylight — no need to rush your start.`)
+    else if (sun.label === 'Sunrise') tips.push(`Sunrise at ${sun.value}. Early starters get the freshest trail conditions.`)
+    else                              tips.push(`${sun.label} at ${sun.value}.`)
+
+  } else if (todayVerdict === 'caution') {
+    tips.push(todayReason)
+    tips.push('Avoid low-lying and shaded sections — they hold moisture the longest.')
+    tips.push('Leaving ruts? Turn around. Protect the trail.')
+
+  } else {
+    // nogo
+    tips.push(todayReason)
+
+    const nextGoodIdx = weekVerdicts.findIndex((v, i) => i > 0 && v === 'go')
+    if (nextGoodIdx > 0) {
+      const labels = ['today','tomorrow','in 2 days','in 3 days','in 4 days','in 5 days','in 6 days']
+      tips.push(`Next green window looks like ${labels[nextGoodIdx]}. Check back then.`)
+    } else {
+      tips.push('No clear window this week. Check back daily as the forecast updates.')
+    }
+
+    tips.push('Good time to clean your drivetrain, check tire pressure, and prep your kit.')
+  }
+
+  return { todayVerdict, todayReason, weekVerdicts, tips }
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -415,10 +556,13 @@ export default function App() {
   const [currentTemp,    setCurrentTemp]    = useState(null)
   const [currentHumidity,setCurrentHumidity]= useState(null)
   const [airQuality,     setAirQuality]     = useState(null)
-  const [dailyForecast,  setDailyForecast]  = useState([])
-  const [sunTimes,       setSunTimes]       = useState([])
-  const [refreshing,     setRefreshing]     = useState(false)
-  const [refreshPhase,   setRefreshPhase]   = useState('idle') // 'idle' | 'updating' | 'done'
+  const [dailyForecast,    setDailyForecast]    = useState([])
+  const [dailyIntervals,   setDailyIntervals]   = useState([])
+  const [weatherCodeNow,   setWeatherCodeNow]   = useState(null)
+  const [precipIntensityNow, setPrecipIntensityNow] = useState(0)
+  const [sunTimes,         setSunTimes]         = useState([])
+  const [refreshing,       setRefreshing]       = useState(false)
+  const [refreshPhase,     setRefreshPhase]     = useState('idle') // 'idle' | 'updating' | 'done'
   const lastFetchRef = useRef(null)
 
   // GPS + reverse geocode on mount
@@ -455,7 +599,7 @@ export default function App() {
     lastFetchRef.current = Date.now()
 
     const weatherFetch = fetch(
-      `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
+      `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
     ).then(r => r.json())
 
     const sunFetch = fetch(
@@ -472,15 +616,19 @@ export default function App() {
       setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
       setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
       setAirQuality(epaLabel(cur.epaIndex))
-      const days = (daily?.intervals ?? []).slice(0, 7).map(interval => ({
+      setWeatherCodeNow(cur.weatherCode ?? null)
+      setPrecipIntensityNow(cur.precipitationIntensity ?? 0)
+      const rawDaily = (daily?.intervals ?? []).slice(0, 7)
+      setDailyIntervals(rawDaily)
+      setDailyForecast(rawDaily.map(interval => ({
         day:     dayAbbr(interval.startTime),
         tempMax: interval.values?.temperatureMax != null
                   ? Math.round(interval.values.temperatureMax) : null,
-      }))
-      setDailyForecast(days)
+      })))
     } else {
       setCurrentTemp(null); setCurrentHumidity(null)
       setAirQuality(null);  setDailyForecast([])
+      setDailyIntervals([]); setWeatherCodeNow(null); setPrecipIntensityNow(0)
     }
 
     if (sunResult.status === 'fulfilled') {
@@ -551,6 +699,11 @@ export default function App() {
     if (gpsLocationName) setLocationName(gpsLocationName)
   }
 
+  const verdict = useMemo(() => {
+    if (!dailyIntervals.length) return null
+    return computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes })
+  }, [dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes])
+
   return (
     <>
       <SplashScreen />
@@ -618,7 +771,7 @@ export default function App() {
               color: '#e8f5d0', borderRadius: 999,
               fontSize: 11, fontWeight: 500, padding: '3px 10px',
             }}>
-              Sunday · Apr 5
+              {TODAY_LABEL}
             </div>
             <div className="flex items-center gap-3 mt-1">
               <div style={{
@@ -627,13 +780,15 @@ export default function App() {
                 borderRadius: '50%',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 color: '#e8f5d0', fontSize: 18, flexShrink: 0,
-              }}>✓</div>
+              }}>
+                {verdict?.todayVerdict === 'nogo' ? '✕' : verdict?.todayVerdict === 'caution' ? '!' : '✓'}
+              </div>
               <div>
                 <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, color: '#e8f5d0', lineHeight: 1.1 }}>
-                  Go ride.
+                  {verdict?.todayVerdict === 'nogo' ? 'Stay home today.' : verdict?.todayVerdict === 'caution' ? 'Ride with care.' : 'Go ride.'}
                 </div>
                 <div style={{ color: '#a8c882', fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
-                  Trails dry for 58 hrs. Firm, fast conditions expected today.
+                  {verdict?.todayReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
                 </div>
               </div>
             </div>
@@ -666,11 +821,7 @@ export default function App() {
               Trail tips
             </div>
             <div className="flex flex-col gap-2">
-              {[
-                'Expect firm, fast conditions. Great day for pushing pace on hardpack.',
-                'UV index is high. Bring sunscreen and extra water for exposed sections.',
-                'Sunset at 7:51pm. Plenty of daylight, no rush on your start time.',
-              ].map((tip, i) => (
+              {(verdict?.tips ?? ['Loading trail conditions…']).map((tip, i) => (
                 <div key={i} style={{ background: '#ffffff', borderRadius: 16, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }} className="flex items-start gap-3">
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5a7a3a', flexShrink: 0, marginTop: 5 }} />
                   <span style={{ fontSize: 13, color: '#3a3a2e', lineHeight: 1.5 }}>{tip}</span>
@@ -685,12 +836,14 @@ export default function App() {
               This week
             </div>
             <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-              {weekDays.map(({ day, status, active }, i) => {
-                const forecast = dailyForecast[i]
-                const displayDay  = forecast?.day  ?? day
+              {Array.from({ length: 7 }, (_, i) => {
+                const forecast    = dailyForecast[i]
+                const displayDay  = forecast?.day ?? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(new Date().getDay() + i) % 7]
                 const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
+                const status      = verdict?.weekVerdicts?.[i] ?? 'go'
+                const active      = i === 0
                 return (
-                  <div key={day} style={{
+                  <div key={i} style={{
                     background: active ? '#2d4a1e' : '#ffffff',
                     borderRadius: 14, padding: '12px 4px', textAlign: 'center',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
