@@ -575,6 +575,136 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
   return { todayVerdict, todayReason, weekVerdicts, tips }
 }
 
+// ─── Evidence Panel helpers ───────────────────────────────────────────────
+
+const PILL_STYLES = {
+  Ideal:    { background: '#d4edda', color: '#155724' },
+  Good:     { background: '#e8f5d0', color: '#3a7a1e' },
+  Marginal: { background: '#fff3cd', color: '#856404' },
+  Blocking: { background: '#f8d7da', color: '#721c24' },
+  Neutral:  { background: '#e9e5de', color: '#6c6860' },
+}
+
+function StatusPill({ status }) {
+  const s = PILL_STYLES[status] ?? PILL_STYLES.Neutral
+  return (
+    <span style={{
+      ...s, fontSize: 10, fontWeight: 600,
+      padding: '3px 10px', borderRadius: 999,
+      textTransform: 'uppercase', letterSpacing: '0.04em',
+    }}>
+      {status}
+    </span>
+  )
+}
+
+function humidityStatus(h) {
+  if (h == null) return 'Neutral'
+  if (h < 60) return 'Ideal'
+  if (h <= 75) return 'Good'
+  if (h <= 85) return 'Marginal'
+  return 'Blocking'
+}
+
+function tempStatus(t) {
+  if (t == null) return 'Neutral'
+  if (t >= 55 && t <= 80) return 'Ideal'
+  if ((t >= 45 && t < 55) || (t > 80 && t <= 90)) return 'Good'
+  if ((t >= 35 && t < 45) || (t > 90 && t <= 95)) return 'Marginal'
+  return 'Blocking'
+}
+
+function aqiStatus(label) {
+  if (!label || label === '--') return 'Neutral'
+  if (label === 'Good') return 'Ideal'
+  if (label === 'Moderate') return 'Good'
+  if (label === 'Poor') return 'Marginal'
+  return 'Blocking'
+}
+
+function precipStatus(inches) {
+  if (inches == null) return 'Neutral'
+  if (inches === 0) return 'Ideal'
+  if (inches < 0.05) return 'Good'
+  if (inches <= 0.1) return 'Marginal'
+  return 'Blocking'
+}
+
+function dryStreakStatus(hrs) {
+  if (hrs == null) return 'Neutral'
+  if (hrs > 48) return 'Ideal'
+  if (hrs >= 24) return 'Good'
+  if (hrs >= 12) return 'Marginal'
+  return 'Blocking'
+}
+
+function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow }) {
+  const sun = sunDisplay(sunTimes)
+  const precipToday = dailyIntervals[0]?.values?.precipitationAccumulation ?? 0
+  const now = new Date()
+  const hourOfDay = now.getHours() + now.getMinutes() / 60
+
+  const sunTile = { icon: sun.icon, name: sun.label, value: sun.value, status: 'Neutral' }
+
+  if (todayVerdict === 'go') {
+    // Estimate dry streak: no significant rain, assume long dry period
+    const dryHrs = precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48)
+    return [
+      { icon: '☀️', name: 'Dry Streak', value: `${Math.round(dryHrs)} hrs dry`, status: dryStreakStatus(dryHrs) },
+      { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
+      { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
+      { icon: '🌿', name: 'Air Quality', value: airQuality ?? '--', status: aqiStatus(airQuality) },
+      { icon: '🌤️', name: 'Forecast', value: precipToday < 0.01 ? 'Clear today' : `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
+      sunTile,
+    ]
+  }
+
+  if (todayVerdict === 'caution') {
+    // Estimate hours since rain
+    const estHrsSinceRain = Math.max(1, hourOfDay - 2)
+    const dryoutHrs = precipToday * 24
+    // Figure out rain timing description
+    let rainTiming = 'Rain possible'
+    if (precipToday >= 0.05 && precipToday <= 0.1) rainTiming = 'Light rain today'
+    else if (precipToday > 0.1 && estHrsSinceRain > dryoutHrs * 0.75) rainTiming = 'Drying out'
+    else if (precipToday > 0.1) rainTiming = 'Rain earlier'
+
+    return [
+      { icon: '⏱️', name: 'Dry Streak', value: `${Math.round(estHrsSinceRain)} hrs since rain`, status: estHrsSinceRain < 12 ? 'Marginal' : dryStreakStatus(estHrsSinceRain) },
+      { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
+      { icon: '🌧️', name: 'Rain Timing', value: rainTiming, status: 'Marginal' },
+      { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
+      { icon: '🌥️', name: 'Forecast', value: `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
+      sunTile,
+    ]
+  }
+
+  // nogo
+  const dryoutHrs = precipToday * 24
+  const estHrsSinceRain = Math.max(1, hourOfDay - 2)
+  const hoursLeft = Math.max(0, Math.ceil(dryoutHrs - estHrsSinceRain))
+  const tiles = []
+
+  if (precipToday > 0 || precipIntensityNow > 0) {
+    tiles.push({ icon: '🌧️', name: 'Rainfall', value: precipIntensityNow > 0.1 ? 'Raining now' : `${precipToday.toFixed(2)}"`, status: 'Blocking' })
+  }
+  if (hoursLeft > 0 && precipToday > 0.1) {
+    tiles.push({ icon: '⏳', name: 'Hrs Until Rideable', value: `~${hoursLeft} hrs`, status: 'Blocking' })
+  }
+  tiles.push({ icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) })
+  if (precipToday > 0.1) {
+    tiles.push({ icon: '🌧️', name: 'Forecast Rain', value: `${precipToday.toFixed(2)}" today`, status: 'Blocking' })
+  }
+  if (currentTemp != null && currentTemp < 35) {
+    tiles.push({ icon: '🥶', name: 'Temperature', value: `${currentTemp}°F`, status: 'Blocking' })
+  } else {
+    tiles.push({ icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) })
+  }
+  tiles.push(sunTile)
+
+  return tiles
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -934,22 +1064,34 @@ export default function App() {
             </div>
           </div>
 
-          {/* Conditions strip */}
-          <div style={{ background: '#ffffff', borderRadius: 18, padding: '16px 14px 12px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)', opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-            <div className="grid grid-cols-4 gap-1 text-center">
-              {(() => {
-                const sun = sunDisplay(sunTimes)
-                return [
-                  { icon: '🌡️', value: currentTemp     != null ? `${currentTemp}°F`    : '--', label: 'Temp'     },
-                  { icon: '💧', value: currentHumidity  != null ? `${currentHumidity}%` : '--', label: 'Humidity' },
-                  { icon: sun.icon, value: sun.value, label: sun.label },
-                  { icon: '🌿', value: airQuality ?? '--', label: 'Air', green: epaIsGood(airQuality) },
-                ]
-              })().map(({ icon, value, label, green }) => (
-                <div key={label} className="flex flex-col items-center gap-1">
-                  <span style={{ fontSize: 18 }}>{icon}</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: green ? '#5a7a3a' : '#2c2c1e' }}>{value}</span>
-                  <span style={{ fontSize: 10, color: '#8a8475', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+          {/* Evidence panel */}
+          <div style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
+              Conditions
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {buildEvidenceTiles({
+                todayVerdict: verdict?.todayVerdict ?? 'go',
+                dailyIntervals,
+                currentTemp,
+                currentHumidity,
+                airQuality,
+                sunTimes,
+                precipIntensityNow,
+              }).map(({ icon, name, value, status }) => (
+                <div key={name} style={{
+                  background: '#ffffff',
+                  borderRadius: 14,
+                  padding: '14px 10px 12px',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)',
+                  textAlign: 'center',
+                }} className="flex flex-col items-center gap-1">
+                  <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
+                  <span style={{ fontSize: 9, fontWeight: 600, color: '#8a8475', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 4 }}>{name}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#2c2c1e', marginTop: 2 }}>{value}</span>
+                  <div style={{ marginTop: 6 }}>
+                    <StatusPill status={status} />
+                  </div>
                 </div>
               ))}
             </div>
