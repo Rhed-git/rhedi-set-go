@@ -1002,37 +1002,6 @@ export default function App() {
             </button>
           </header>
 
-          {/* Week strip — day selector that drives verdict/conditions/tips below */}
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
-              This week
-            </div>
-            <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-              {Array.from({ length: 7 }, (_, i) => {
-                const forecast    = dailyForecast[i]
-                const displayDay  = forecast?.day ?? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(new Date().getDay() + i) % 7]
-                const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
-                const status      = verdict?.weekVerdicts?.[i] ?? 'go'
-                const active      = i === 0
-                return (
-                  <div key={i} style={{
-                    background: active ? '#2d4a1e' : '#ffffff',
-                    borderRadius: 14, padding: '12px 4px', textAlign: 'center',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
-                  }} className="flex flex-col items-center gap-1">
-                    <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
-                      {displayDay}
-                    </span>
-                    <StatusDot status={status} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: active ? '#e8f5d0' : '#3a3a2e' }}>
-                      {displayTemp}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
           {/* Verdict card */}
           <div style={{ background: '#2d4a1e', borderRadius: 22, padding: '20px 20px 22px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
             <div style={{
@@ -1061,6 +1030,37 @@ export default function App() {
                   {verdict?.todayReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Week strip — 7-day outlook */}
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
+              This week
+            </div>
+            <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
+              {Array.from({ length: 7 }, (_, i) => {
+                const forecast    = dailyForecast[i]
+                const displayDay  = forecast?.day ?? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(new Date().getDay() + i) % 7]
+                const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
+                const status      = verdict?.weekVerdicts?.[i] ?? 'go'
+                const active      = i === 0
+                return (
+                  <div key={i} style={{
+                    background: active ? '#2d4a1e' : '#ffffff',
+                    borderRadius: 14, padding: '12px 4px', textAlign: 'center',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+                  }} className="flex flex-col items-center gap-1">
+                    <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
+                      {displayDay}
+                    </span>
+                    <StatusDot status={status} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: active ? '#e8f5d0' : '#3a3a2e' }}>
+                      {displayTemp}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
