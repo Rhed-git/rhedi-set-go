@@ -580,7 +580,7 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
 export default function App() {
   const [coords,          setCoords]          = useState(null)
   const [locationName,    setLocationName]    = useState('Locating...')
-  const [gpsLocationName, setGpsLocationName] = useState(null)
+  const [isUsingGPS,      setIsUsingGPS]      = useState(() => localStorage.getItem('rsg_location_mode') !== 'manual')
   const [sheetOpen,       setSheetOpen]       = useState(false)
 
   const [weatherLoading, setWeatherLoading] = useState(false)
@@ -597,30 +597,47 @@ export default function App() {
   const [cacheTimestamp,   setCacheTimestamp]   = useState(null)
   const [tick,             setTick]             = useState(0) // increments every min to refresh age label
 
-  // GPS + reverse geocode on mount
+  // Reverse-geocode helper — shared by init and GPS refresh
+  const reverseGeocode = async (latitude, longitude) => {
+    const res  = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+      { headers: NOMINATIM_HEADERS }
+    )
+    const data = await res.json()
+    const addr = data.address ?? {}
+    const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? ''
+    const abbr = usStateAbbr[addr.state ?? ''] ?? addr.state ?? ''
+    return city && abbr ? `${city}, ${abbr}` : city || abbr || 'Unknown location'
+  }
+
+  // On mount: restore GPS or manual location
   useEffect(() => {
+    if (!isUsingGPS) {
+      // Restore saved manual location
+      try {
+        const saved = JSON.parse(localStorage.getItem('rsg_manual_location') ?? 'null')
+        if (saved) {
+          setCoords({ latitude: saved.lat, longitude: saved.lon })
+          setLocationName(saved.name)
+          return
+        }
+      } catch {}
+      // No saved manual location — fall through to GPS
+    }
+
     if (!navigator.geolocation) { setLocationName('Location unavailable'); return }
     navigator.geolocation.getCurrentPosition(
       async ({ coords: { latitude, longitude } }) => {
         setCoords({ latitude, longitude })
         try {
-          const res  = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
-            { headers: NOMINATIM_HEADERS }
-          )
-          const data = await res.json()
-          const addr = data.address ?? {}
-          const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? ''
-          const abbr = usStateAbbr[addr.state ?? ''] ?? addr.state ?? ''
-          const name = city && abbr ? `${city}, ${abbr}` : city || abbr || 'Unknown location'
+          const name = await reverseGeocode(latitude, longitude)
           setLocationName(name)
-          setGpsLocationName(name)
         } catch { setLocationName('Location unavailable') }
       },
       () => setLocationName('Location unavailable'),
       { timeout: 10000 }
     )
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tick every minute so the "Updated X min ago" label stays current
   useEffect(() => {
@@ -714,26 +731,39 @@ export default function App() {
     fetchWeatherData(coords.latitude, coords.longitude)
   }, [coords]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Manual refresh — bypasses weather cache
+  // Manual refresh — bypasses weather cache; re-acquires GPS if in GPS mode
   const handleRefresh = async () => {
-    if (!coords || refreshing) return
+    if (refreshing) return
     setRefreshing(true)
     setRefreshPhase('updating')
     try {
-      await Promise.allSettled([
-        fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${coords.latitude}&lon=${coords.longitude}&format=json`,
-          { headers: NOMINATIM_HEADERS }
-        ).then(r => r.json()).then(data => {
-          const addr = data.address ?? {}
-          const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? ''
-          const abbr = usStateAbbr[addr.state ?? ''] ?? addr.state ?? ''
-          const name = city && abbr ? `${city}, ${abbr}` : city || abbr || 'Unknown location'
-          setLocationName(name)
-          if (!gpsLocationName) setGpsLocationName(name)
-        }).catch(() => {}),
-        fetchWeatherData(coords.latitude, coords.longitude, { force: true }),
-      ])
+      if (isUsingGPS && navigator.geolocation) {
+        // Re-acquire fresh GPS position, then fetch weather for it
+        await new Promise(resolve => {
+          navigator.geolocation.getCurrentPosition(
+            async ({ coords: { latitude, longitude } }) => {
+              setCoords({ latitude, longitude })
+              await Promise.allSettled([
+                reverseGeocode(latitude, longitude).then(name => {
+                  setLocationName(name)
+                }).catch(() => {}),
+                fetchWeatherData(latitude, longitude, { force: true }),
+              ])
+              resolve()
+            },
+            async () => {
+              // GPS failed — fall back to last known coords
+              if (coords) await fetchWeatherData(coords.latitude, coords.longitude, { force: true })
+              resolve()
+            },
+            { timeout: 10000 }
+          )
+        })
+      } else {
+        // Manual location — refresh weather for stored coords
+        if (!coords) return
+        await fetchWeatherData(coords.latitude, coords.longitude, { force: true })
+      }
     } finally {
       setRefreshing(false)
       setRefreshPhase('done')
@@ -753,12 +783,29 @@ export default function App() {
   }, [coords]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectLocation = r => {
-    setCoords({ latitude: parseFloat(r.lat), longitude: parseFloat(r.lon) })
+    const lat = parseFloat(r.lat), lon = parseFloat(r.lon)
+    setCoords({ latitude: lat, longitude: lon })
     setLocationName(r.label)
+    setIsUsingGPS(false)
+    localStorage.setItem('rsg_location_mode', 'manual')
+    try { localStorage.setItem('rsg_manual_location', JSON.stringify({ lat, lon, name: r.label })) } catch {}
   }
 
   const handleUseGPS = () => {
-    if (gpsLocationName) setLocationName(gpsLocationName)
+    setIsUsingGPS(true)
+    localStorage.setItem('rsg_location_mode', 'gps')
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords: { latitude, longitude } }) => {
+        setCoords({ latitude, longitude })
+        try {
+          const name = await reverseGeocode(latitude, longitude)
+          setLocationName(name)
+        } catch {}
+      },
+      () => {},
+      { timeout: 10000 }
+    )
   }
 
   const verdict = useMemo(() => {
