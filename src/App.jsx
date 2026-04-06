@@ -5,18 +5,18 @@ import './App.css'
 // 0 → Rhedi, 600 → Set, 1200 → Go, 1600 → slogan, 2600 → fade out, 3200 → remove
 
 function SplashScreen() {
-  const [showSet,    setShowSet]    = useState(false)
-  const [showGo,     setShowGo]     = useState(false)
-  const [showSlogan, setShowSlogan] = useState(false)
-  const [fading,     setFading]     = useState(false)
-  const [gone,       setGone]       = useState(false)
+  const [showWith,       setShowWith]       = useState(false)
+  const [showConfidence, setShowConfidence] = useState(false)
+  const [showSub,        setShowSub]        = useState(false)
+  const [fading,         setFading]         = useState(false)
+  const [gone,           setGone]           = useState(false)
 
   useEffect(() => {
-    const t1 = setTimeout(() => setShowSet(true),    600)
-    const t2 = setTimeout(() => setShowGo(true),     1200)
-    const t3 = setTimeout(() => setShowSlogan(true), 1600)
-    const t4 = setTimeout(() => setFading(true),     2600)
-    const t5 = setTimeout(() => setGone(true),       3200)
+    const t1 = setTimeout(() => setShowWith(true),       600)
+    const t2 = setTimeout(() => setShowConfidence(true), 1200)
+    const t3 = setTimeout(() => setShowSub(true),        1600)
+    const t4 = setTimeout(() => setFading(true),         2600)
+    const t5 = setTimeout(() => setGone(true),           3200)
     return () => [t1, t2, t3, t4, t5].forEach(clearTimeout)
   }, [])
 
@@ -41,19 +41,19 @@ function SplashScreen() {
       pointerEvents: fading ? 'none' : 'auto',
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
-        <span style={wordStyle}>Rhedi</span>
-        {showSet && <span style={wordStyle}>Set</span>}
-        {showGo  && <span style={wordStyle}>Go</span>}
+        <span style={wordStyle}>Send</span>
+        {showWith       && <span style={wordStyle}>with</span>}
+        {showConfidence && <span style={wordStyle}>Confidence</span>}
       </div>
       <div style={{
         fontFamily: "'DM Sans', sans-serif",
         fontSize: 15, color: '#f5f2eb',
-        opacity: showSlogan ? 0.7 : 0,
+        opacity: showSub ? 0.7 : 0,
         marginTop: 32,
         transition: 'opacity 0.5s ease',
         textAlign: 'center',
       }}>
-        Less time scrolling, more time rolling.
+        powered by Rhed
       </div>
     </div>
   )
@@ -301,8 +301,8 @@ function BottomSheet({ open, onClose, locationName, gpsCoords, onSelectLocation,
 
         <div style={DIVIDER} />
 
-        {/* Sport */}
-        <div style={SECTION_LABEL}>Sport</div>
+        {/* Activity */}
+        <div style={SECTION_LABEL}>Activity</div>
         <div className="flex gap-2">
           {[
             { label: 'MTB',   active: true  },
@@ -779,12 +779,14 @@ export default function App() {
   const applyData = (weatherRaw, sunRaw, timestamp) => {
     if (weatherRaw) {
       const timelines = weatherRaw?.data?.timelines ?? []
-      const hourly = timelines.find(t => t.timestep === '1h')
-      const daily  = timelines.find(t => t.timestep === '1d')
-      const cur = hourly?.intervals?.[0]?.values ?? {}
+      const current = timelines.find(t => t.timestep === 'current')
+      const hourly  = timelines.find(t => t.timestep === '1h')
+      const daily   = timelines.find(t => t.timestep === '1d')
+      const curVals  = current?.intervals?.[0]?.values ?? {}
+      const cur      = hourly?.intervals?.[0]?.values ?? {}
       setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
       setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
-      setAirQuality(epaLabel(cur.epaIndex))
+      setAirQuality(epaLabel(curVals.epaIndex ?? cur.epaIndex))
       setWeatherCodeNow(cur.weatherCode ?? null)
       setPrecipIntensityNow(cur.precipitationIntensity ?? 0)
       const rawDaily = (daily?.intervals ?? []).slice(0, 7)
@@ -826,7 +828,7 @@ export default function App() {
       setWeatherLoading(true)
       try {
         weatherRaw = await fetch(
-          `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=1h,1d&apikey=${apiKey}`
+          `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=current,1h,1d&apikey=${apiKey}`
         ).then(r => r.json())
         writeCache(WEATHER_CACHE_KEY, weatherRaw, lat, lon)
         weatherTimestamp = Date.now()
