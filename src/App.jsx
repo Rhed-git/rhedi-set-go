@@ -88,7 +88,7 @@ const NOMINATIM_HEADERS = { 'User-Agent': 'RhediSetGo/1.0' }
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
 const WEATHER_CACHE_KEY = 'rsg_weather_cache'
-const SUN_CACHE_KEY     = 'rsg_sun_cache'
+const SUN_CACHE_KEY     = 'rsg_daily_cache'   // renamed v2: now also stores Open-Meteo daily weather
 const WEATHER_MAX_AGE   = 30 * 60 * 1000      // 30 min
 const SUN_MAX_AGE       = 6 * 60 * 60 * 1000  // 6 hours
 
@@ -114,6 +114,37 @@ function cacheAgeLabel(timestamp) {
   if (mins < 1) return 'Updated just now'
   if (mins === 1) return 'Updated 1 min ago'
   return `Updated ${mins} min ago`
+}
+
+// ─── Preferences framework ────────────────────────────────────────────────────
+// Default values produce identical behavior to the original engine — nothing
+// changes until the user explicitly updates a preference via setPreferences().
+
+const PREFS_STORAGE_KEY = 'rsg_user_preferences'
+
+const defaultPreferences = {
+  preferredRideTime: null,   // null = no preference | 0-23 = hour of day (e.g. 7 = 7am)
+  riskTolerance: 'cautious', // 'cautious' (strictest) | 'moderate' | 'aggressive'
+  soilType: 'auto',          // 'auto' (1.0x) | 'sandy' (0.7x) | 'clay' (1.4x) | 'loam' (1.0x)
+}
+
+// Returns merged preferences from localStorage + defaults.
+// The bottom sheet settings UI will call this when it renders.
+function getPreferences() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY) ?? 'null')
+    return saved ? { ...defaultPreferences, ...saved } : { ...defaultPreferences }
+  } catch {
+    return { ...defaultPreferences }
+  }
+}
+
+// Persists preferences to localStorage.
+// The bottom sheet settings UI will call this when a preference changes.
+function setPreferences(prefs) {
+  try {
+    localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs))
+  } catch {}
 }
 
 function formatResult(item) {
@@ -437,12 +468,83 @@ function StatusDot({ status }) {
 // Tomorrow.io weather codes that indicate active precipitation
 const RAIN_CODES = new Set([4000, 4001, 4200, 4201, 6000, 6001, 6200, 6201, 8000])
 
-function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes }) {
+function computeVerdict({
+  dailyIntervals,
+  hourlyIntervals,     // full hourly timeline from the API
+  currentTemp,
+  currentHumidity,
+  weatherCodeNow,
+  precipIntensityNow,
+  sunTimes,
+  preferences,         // userPreferences object
+}) {
   const now = new Date()
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0)
+
+  // ── [PREF: riskTolerance] derive thresholds ──────────────────────────────
+  // 'cautious' preserves original thresholds exactly.
+  // 'moderate' and 'aggressive' relax them so the rider sees more green windows.
+  //
+  // Humidity: max % before flagging caution
+  const humidityThreshold =
+    preferences.riskTolerance === 'aggressive' ? 95 :
+    preferences.riskTolerance === 'moderate'   ? 90 : 85  // cautious default (original)
+
+  // Dryout caution fraction: fraction of dryout time that must elapse before
+  // transitioning from nogo → caution. Higher = earlier escape from nogo.
+  //   cautious:   75% elapsed → caution  (original)
+  //   moderate:   60% elapsed → caution
+  //   aggressive: 50% elapsed → caution
+  const dryoutCautionFraction =
+    preferences.riskTolerance === 'aggressive' ? 0.50 :
+    preferences.riskTolerance === 'moderate'   ? 0.60 : 0.75  // cautious default (original)
+
+  // ── [PREF: soilType] dryout speed multiplier ─────────────────────────────
+  // Applied to dryoutHoursNeeded. Sandy soil drains faster; clay holds water longer.
+  //   sandy: 0.7x | clay: 1.4x | loam: 1.0x | auto: 1.0x (until USDA data is wired in)
+  const soilMultiplier =
+    preferences.soilType === 'sandy' ? 0.7 :
+    preferences.soilType === 'clay'  ? 1.4 : 1.0
+
+  // ── [Problem 1] Sum hourly rainfall already fallen today (midnight → now) ──
+  // We use this — not the daily aggregate — for dryout calculations, because
+  // the daily total includes forecasted rain that hasn't fallen yet. That would
+  // incorrectly inflate the dryout estimate when rain is still incoming.
+  // The daily total continues to be used for detecting future rain in the forecast.
+  const rainfallAlreadyToday = (hourlyIntervals ?? []).reduce((sum, interval) => {
+    const t = new Date(interval.startTime)
+    if (t >= midnight && t <= now) {
+      return sum + (interval.values?.precipitationAccumulation ?? 0)
+    }
+    return sum
+  }, 0)
+
+  // ── [Problem 2] Find when rain last stopped → hoursElapsed ───────────────
+  // Walk through hourly intervals up to now; record the last interval with
+  // meaningful precipitation. Adding 1 hr to startTime gives us the end of that
+  // interval, which is the best approximation of when the rain actually stopped.
+  let lastRainEndTime = null
+  for (const interval of (hourlyIntervals ?? [])) {
+    const t = new Date(interval.startTime)
+    if (t > now) break
+    const accumulation = interval.values?.precipitationAccumulation ?? 0
+    const intensity    = interval.values?.precipitationIntensity    ?? 0
+    if (accumulation > 0.01 || intensity > 0.05) {
+      lastRainEndTime = new Date(t.getTime() + 3600000) // end of this 1-hour bucket
+    }
+  }
+  // If no rain appears in the hourly data, assume a long dry streak.
+  const hoursElapsed = lastRainEndTime
+    ? Math.max(0, (now.getTime() - lastRainEndTime.getTime()) / 3600000)
+    : 48
+
+  // [PREF: soilType] applied here — soil type scales how long the trail takes to dry
+  const dryoutHoursNeeded   = rainfallAlreadyToday * 24 * soilMultiplier
+  const dryoutHoursRemaining = Math.max(0, dryoutHoursNeeded - hoursElapsed)
 
   // --- Extract per-day precipitation from daily intervals ---
-  const weekPrecip = dailyIntervals.map(d => d?.values?.precipitationAccumulation ?? 0)
-  const precipToday = weekPrecip[0] ?? 0
+  const weekPrecip  = dailyIntervals.map(d => d?.values?.precipitationAccumulation ?? 0)
+  const precipToday = weekPrecip[0] ?? 0  // daily total (includes rain still forecasted today)
 
   // --- Today's verdict — first match wins ---
   let todayVerdict = 'go'
@@ -458,36 +560,41 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
     todayVerdict = 'nogo'
     todayReason  = 'Rain falling right now. Riding will damage wet trails — sit this one out.'
   }
-  // 3. Significant rain in today's window (past or forecast)
-  else if (precipToday > 0.1) {
-    const dryoutHrs      = precipToday * 24
-    // Estimate hours elapsed since rain: if it's currently dry, assume rain peaked a few hours ago
-    const hourOfDay      = now.getHours() + now.getMinutes() / 60
-    const estHrsSinceRain = Math.max(1, hourOfDay - 2)
-    const cautionStart   = dryoutHrs * 0.75
-
-    if (estHrsSinceRain < cautionStart) {
+  // 3. Significant rain already fallen today — dryout check using rainfallAlreadyToday
+  // [Problem 1] We use the actual fallen amount, not the daily forecast total.
+  // [PREF: riskTolerance] dryoutCautionFraction controls the nogo→caution transition.
+  // [PREF: soilType] soilMultiplier is baked into dryoutHoursNeeded above.
+  else if (rainfallAlreadyToday > 0.1) {
+    const cautionStart = dryoutHoursNeeded * dryoutCautionFraction
+    if (hoursElapsed < cautionStart) {
       todayVerdict = 'nogo'
-      const hoursLeft = Math.ceil(dryoutHrs - estHrsSinceRain)
-      todayReason = `${precipToday.toFixed(2)}" of rain today. Trails need ~${hoursLeft} more hours to dry.`
-    } else if (estHrsSinceRain < dryoutHrs) {
+      const hoursLeft = Math.ceil(dryoutHoursRemaining)
+      todayReason = `${rainfallAlreadyToday.toFixed(2)}" of rain fell today. Trails need ~${hoursLeft} more hours to dry.`
+    } else if (dryoutHoursRemaining > 0) {
       todayVerdict = 'caution'
-      todayReason = `${precipToday.toFixed(2)}" of rain today. Trails may be soft in spots — ride with care.`
+      todayReason = `${rainfallAlreadyToday.toFixed(2)}" of rain today. Trails may be soft in spots — ride with care.`
     }
-    // else falls through to GO (dryout complete)
+    // else dryout complete — falls through to GO
   }
-  // 4. Light rain today (trace amounts)
-  else if (precipToday >= 0.05) {
+  // 4. Significant rain still forecasted today (hasn't fallen yet — daily total > already fallen)
+  // [Problem 1] Daily total used here as specified: "forecasted rain hours remaining today"
+  else if (precipToday > 0.1) {
+    todayVerdict = 'nogo'
+    todayReason  = `${precipToday.toFixed(2)}" of rain in today's forecast. Trails won't be rideable.`
+  }
+  // 5. Light rain in forecast (trace amounts)
+  // [PREF: riskTolerance] aggressive riders skip the caution for light rain
+  else if (precipToday >= 0.05 && preferences.riskTolerance !== 'aggressive') {
     todayVerdict = 'caution'
     todayReason  = `Light rain (${precipToday.toFixed(2)}") in today's forecast. Conditions may soften later.`
   }
-  // 5. High humidity caution (muggy after recent moisture)
-  else if (currentHumidity != null && currentHumidity > 85) {
+  // 6. High humidity caution — [PREF: riskTolerance] threshold varies by tolerance
+  else if (currentHumidity != null && currentHumidity > humidityThreshold) {
     todayVerdict = 'caution'
     todayReason  = `High humidity at ${currentHumidity}%. Trails may feel tacky or slow in low-lying areas.`
   }
 
-  // 6. GO — build a descriptive reason
+  // 7. GO — build a descriptive reason
   if (todayVerdict === 'go') {
     if (currentTemp != null && currentHumidity != null) {
       if (currentHumidity < 50) {
@@ -500,37 +607,153 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
     }
   }
 
-  // --- 7-day verdicts ---
-  const weekVerdicts = weekPrecip.map((precip, i) => {
-    if (i === 0) return todayVerdict
+  // ── [PREF: preferredRideTime] today check ────────────────────────────────
+  // If the user has a preferred ride time, check that specific hour's conditions.
+  // • Rain at or before preferred time → strengthens nogo/caution verdict
+  // • Good at preferred time but rain arrives later → keep Go, add tip
+  let preferredRideTimeTip = null
+  if (preferences.preferredRideTime != null && (hourlyIntervals ?? []).length > 0) {
+    const prefHour = preferences.preferredRideTime
+    const prefLabel = `${prefHour % 12 || 12}${prefHour < 12 ? 'am' : 'pm'}`
 
-    const prevPrecip = weekPrecip[i - 1]
+    // Find the hourly interval for today at the preferred ride hour
+    const rideInterval = (hourlyIntervals ?? []).find(interval => {
+      const t = new Date(interval.startTime)
+      return t >= midnight &&
+             t.getDate()  === midnight.getDate()  &&
+             t.getMonth() === midnight.getMonth() &&
+             t.getHours() === prefHour
+    })
 
-    if (precip > 0.1)  return 'nogo'
-    if (precip >= 0.05) return 'caution'
+    if (rideInterval) {
+      const rainAtRideTime =
+        (rideInterval.values?.precipitationAccumulation ?? 0) > 0.05 ||
+        (rideInterval.values?.precipitationIntensity    ?? 0) > 0.05
 
-    // Dryout from previous day's rain — assume ~24 hrs elapsed between day midpoints
-    if (prevPrecip > 0.1) {
-      const dryoutHrs = prevPrecip * 24
-      if (dryoutHrs > 18) return 'nogo'    // > 0.75" prev day: still drying
-      return 'caution'                      // lighter rain prev day: probably soft
+      if (rainAtRideTime && todayVerdict === 'go') {
+        // Rain expected at preferred ride time — upgrade go→caution
+        todayVerdict = 'caution'
+        todayReason  = `Rain expected at your preferred ride time (${prefLabel}).`
+      } else if (!rainAtRideTime && todayVerdict === 'go') {
+        // Check if rain arrives after preferred ride time
+        const rainLater = (hourlyIntervals ?? []).some(interval => {
+          const t = new Date(interval.startTime)
+          return t >= midnight &&
+                 t.getDate()  === midnight.getDate()  &&
+                 t.getMonth() === midnight.getMonth() &&
+                 t.getHours() > prefHour &&
+                 ((interval.values?.precipitationAccumulation ?? 0) > 0.05 ||
+                  (interval.values?.precipitationIntensity    ?? 0) > 0.05)
+        })
+        if (rainLater) {
+          // Conditions good at ride time; rain arrives later — surface tip
+          preferredRideTimeTip = `Conditions look good at ${prefLabel}. Rain arrives later in the day — start early.`
+        }
+      }
+    }
+  }
+
+  // ── [Problem 2] 7-day verdicts with dryout carryover ────────────────────
+  // For each future day we check how much dryout time from TODAY'S rain is still
+  // remaining at 6am of that day. If significant dryout is still needed, the day
+  // is blocked — regardless of whether that day's own forecast shows rain.
+  //
+  // Carryover logic:
+  //   hoursElapsedAt6am  = hoursElapsed (since rain stopped) + hours from now to 6am day-i
+  //   hoursRemainingAt6am = max(0, dryoutHoursNeeded − hoursElapsedAt6am)
+  //   fractionRemaining  = hoursRemainingAt6am / dryoutHoursNeeded
+  //
+  //   > 25% remaining at 6am → No-Go  (trail still too wet)
+  //   0–25% remaining at 6am → Caution (nearly dry but soft spots remain)
+  //   fully elapsed          → evaluate day's own forecast normally
+  //
+  // weekDetails produces {verdict, reason} per day so the week strip selector can
+  // display the correct verdict card content when the user taps a future day.
+  const weekDetails = weekPrecip.map((precip, i) => {
+    if (i === 0) return { verdict: todayVerdict, reason: todayReason, dryStreakHrs: hoursElapsed }
+
+    // --- Carryover dryout check at 6am of day i ---
+    const sixAmOfDayI = new Date(midnight)
+    sixAmOfDayI.setDate(sixAmOfDayI.getDate() + i)
+    sixAmOfDayI.setHours(6, 0, 0, 0)
+    const hoursElapsedAt6am   = hoursElapsed + Math.max(0, (sixAmOfDayI.getTime() - now.getTime()) / 3600000)
+    const hoursRemainingAt6am = Math.max(0, dryoutHoursNeeded - hoursElapsedAt6am)
+    const fractionRemaining   = dryoutHoursNeeded > 0 ? hoursRemainingAt6am / dryoutHoursNeeded : 0
+
+    // Dry streak hours at 6am of this day — how long the trail will have been dry by morning.
+    // Zero if carryover is still active or this day's own forecast has rain.
+    // Used by buildEvidenceTiles to show an accurate dry streak tile for future days.
+    const dryStreakHrs = (precip > 0.1 || fractionRemaining > 0)
+      ? 0
+      : Math.max(0, hoursElapsedAt6am - dryoutHoursNeeded)
+
+    if (fractionRemaining > 0.25) return { // [Problem 2] >25% of dryout still needed
+      verdict: 'nogo',
+      reason:  `Trails still drying from earlier rain (~${Math.ceil(hoursRemainingAt6am)} hrs needed by 6am).`,
+      dryStreakHrs,
+    }
+    if (fractionRemaining > 0) return {    // [Problem 2] <25% — nearly dry, soft spots
+      verdict: 'caution',
+      reason:  'Nearly dry from earlier rain — soft spots may linger in shaded sections.',
+      dryStreakHrs,
     }
 
-    // Check two days back for heavy rain (> 1" needs 24+ hrs)
-    if (i >= 2 && weekPrecip[i - 2] > 1.0) {
-      const dryoutHrs = weekPrecip[i - 2] * 24
-      if (48 < dryoutHrs) return 'caution'
+    // Carryover fully elapsed — evaluate this day's own forecast
+    if (precip > 0.1) return {
+      verdict: 'nogo',
+      reason:  `${precip.toFixed(2)}" of rain in the forecast. Trails won't be rideable.`,
+      dryStreakHrs,
+    }
+    // [PREF: riskTolerance] aggressive skips caution for light-rain days
+    if (precip >= 0.05 && preferences.riskTolerance !== 'aggressive') return {
+      verdict: 'caution',
+      reason:  `Light rain (${precip.toFixed(2)}") in the forecast. Conditions may soften.`,
+      dryStreakHrs,
     }
 
-    return 'go'
+    // [PREF: preferredRideTime] check hourly data for preferred hour on this future day
+    // Hourly data from Tomorrow.io covers ~120 hrs ahead (roughly 5 days).
+    // Days beyond that range will simply skip this check.
+    if (preferences.preferredRideTime != null && (hourlyIntervals ?? []).length > 0) {
+      const prefHour    = preferences.preferredRideTime
+      const prefLabel   = `${prefHour % 12 || 12}${prefHour < 12 ? 'am' : 'pm'}`
+      const dayMidnight = new Date(midnight)
+      dayMidnight.setDate(dayMidnight.getDate() + i)
+      const rideInterval = (hourlyIntervals ?? []).find(interval => {
+        const t = new Date(interval.startTime)
+        return t >= dayMidnight &&
+               t.getDate()  === dayMidnight.getDate()  &&
+               t.getMonth() === dayMidnight.getMonth() &&
+               t.getHours() === prefHour
+      })
+      if (rideInterval) {
+        const rainAtRideTime =
+          (rideInterval.values?.precipitationAccumulation ?? 0) > 0.05 ||
+          (rideInterval.values?.precipitationIntensity    ?? 0) > 0.05
+        if (rainAtRideTime) return { // [PREF: preferredRideTime] rain at preferred hour
+          verdict: 'caution',
+          reason:  `Rain expected at your preferred ride time (${prefLabel}).`,
+          dryStreakHrs,
+        }
+      }
+    }
+
+    return { verdict: 'go', reason: 'Forecast looks clear. Good conditions expected.', dryStreakHrs }
   })
 
-  // --- Tips ---
+  const weekVerdicts     = weekDetails.map(d => d.verdict)
+  const weekReasons      = weekDetails.map(d => d.reason)
+  const weekDryStreakHrs = weekDetails.map(d => d.dryStreakHrs ?? null)
+
+  // --- Tips (today) ---
   const sun  = sunDisplay(sunTimes)
   const tips = []
 
   if (todayVerdict === 'go') {
-    // Tip 1: temperature
+    // [PREF: preferredRideTime] surface timing tip first if relevant
+    if (preferredRideTimeTip) tips.push(preferredRideTimeTip)
+
+    // Tip: temperature
     if (currentTemp != null) {
       if (currentTemp >= 85)      tips.push(`Hot at ${currentTemp}°F. Bring extra water and plan for shaded rest stops.`)
       else if (currentTemp <= 45) tips.push(`Cold at ${currentTemp}°F. Layer up and warm up gradually before pushing hard.`)
@@ -539,7 +762,7 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
       tips.push('Check local trail conditions before heading out.')
     }
 
-    // Tip 2: humidity
+    // Tip: humidity
     if (currentHumidity != null) {
       if (currentHumidity > 70) tips.push(`Humidity at ${currentHumidity}% — trails may feel tacky. Great for grip on corners.`)
       else                      tips.push(`Low humidity at ${currentHumidity}% — expect dusty, fast conditions on exposed sections.`)
@@ -547,13 +770,15 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
       tips.push('Check local trail reports for current surface conditions.')
     }
 
-    // Tip 3: sunset/sunrise timing
+    // Tip: sunset/sunrise timing
     if (sun.label === 'Sunset')       tips.push(`Sunset at ${sun.value}. Plenty of daylight — no need to rush your start.`)
     else if (sun.label === 'Sunrise') tips.push(`Sunrise at ${sun.value}. Early starters get the freshest trail conditions.`)
     else                              tips.push(`${sun.label} at ${sun.value}.`)
 
   } else if (todayVerdict === 'caution') {
     tips.push(todayReason)
+    // [PREF: preferredRideTime] add timing tip for caution days too
+    if (preferredRideTimeTip) tips.push(preferredRideTimeTip)
     tips.push('Avoid low-lying and shaded sections — they hold moisture the longest.')
     tips.push('Leaving ruts? Turn around. Protect the trail.')
 
@@ -572,7 +797,50 @@ function computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherC
     tips.push('Good time to clean your drivetrain, check tire pressure, and prep your kit.')
   }
 
-  return { todayVerdict, todayReason, weekVerdicts, tips }
+  // --- Per-day tips for the week strip selector ---
+  // Shown when the user taps a future day. Day 0 reuses today's tips above.
+  const DAY_LABELS = ['today','tomorrow','in 2 days','in 3 days','in 4 days','in 5 days','in 6 days']
+  const weekTips = weekDetails.map(({ verdict, reason }, i) => {
+    if (i === 0) return tips
+
+    const tempMax = dailyIntervals[i]?.values?.temperatureMax != null
+      ? Math.round(dailyIntervals[i].values.temperatureMax) : null
+
+    if (verdict === 'go') {
+      const t = []
+      if (tempMax != null) {
+        if (tempMax >= 85)      t.push(`High near ${tempMax}°F — bring extra water and plan for shaded rest stops.`)
+        else if (tempMax <= 45) t.push(`High around ${tempMax}°F — dress in layers and warm up gradually.`)
+        else                    t.push(`High near ${tempMax}°F with no rain. Should be a solid riding day.`)
+      } else {
+        t.push('Forecast looks clear. Check conditions the morning of your ride.')
+      }
+      t.push('Check local trail reports the day before heading out.')
+      t.push('Forecasts can shift — check back closer to your ride.')
+      return t
+    }
+
+    if (verdict === 'caution') {
+      return [
+        reason,
+        'Avoid low-lying and shaded sections — they hold moisture the longest.',
+        'Leaving ruts? Turn around. Protect the trail.',
+      ]
+    }
+
+    // nogo
+    const nextGoodIdx = weekDetails.findIndex((d, j) => j > i && d.verdict === 'go')
+    const t = [reason]
+    if (nextGoodIdx > 0) {
+      t.push(`Looking ahead, ${DAY_LABELS[nextGoodIdx]} may offer a better window.`)
+    } else {
+      t.push('No clear window later this week. Check back daily as the forecast updates.')
+    }
+    t.push('Good time to clean your drivetrain, check tire pressure, and prep your kit.')
+    return t
+  })
+
+  return { todayVerdict, todayReason, weekVerdicts, weekReasons, weekDryStreakHrs, weekTips, tips }
 }
 
 // ─── Evidence Panel helpers ───────────────────────────────────────────────
@@ -615,7 +883,7 @@ function tempStatus(t) {
 }
 
 function aqiStatus(label) {
-  if (!label || label === '--') return 'Neutral'
+  if (!label || label === '--' || label === 'N/A') return 'Neutral'
   if (label === 'Good') return 'Ideal'
   if (label === 'Moderate') return 'Good'
   if (label === 'Poor') return 'Marginal'
@@ -638,7 +906,10 @@ function dryStreakStatus(hrs) {
   return 'Blocking'
 }
 
-function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow }) {
+// dryStreakHours: optional override for the dry-streak tile (passed for future days
+// from the per-day dryStreakHrs computed in computeVerdict). When null/undefined the
+// function falls back to its original same-day estimation logic.
+function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours }) {
   const sun = sunDisplay(sunTimes)
   const precipToday = dailyIntervals[0]?.values?.precipitationAccumulation ?? 0
   const now = new Date()
@@ -647,25 +918,25 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
   const sunTile = { icon: sun.icon, name: sun.label, value: sun.value, status: 'Neutral' }
 
   if (todayVerdict === 'go') {
-    // Estimate dry streak: no significant rain, assume long dry period
-    const dryHrs = precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48)
+    // Use precomputed dry streak for future days; fall back to estimate for today
+    const dryHrs = dryStreakHours != null ? dryStreakHours : (precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48))
     return [
       { icon: '☀️', name: 'Dry Streak', value: `${Math.round(dryHrs)} hrs dry`, status: dryStreakStatus(dryHrs) },
       { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
       { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
       { icon: '🌿', name: 'Air Quality', value: airQuality ?? '--', status: aqiStatus(airQuality) },
-      { icon: '🌤️', name: 'Forecast', value: precipToday < 0.01 ? 'Clear today' : `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
+      { icon: '🌤️', name: 'Forecast', value: precipToday < 0.01 ? 'Clear' : `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
       sunTile,
     ]
   }
 
   if (todayVerdict === 'caution') {
-    // Estimate hours since rain
-    const estHrsSinceRain = Math.max(1, hourOfDay - 2)
+    // Use precomputed dry streak for future days; fall back to estimate for today
+    const estHrsSinceRain = dryStreakHours != null ? dryStreakHours : Math.max(1, hourOfDay - 2)
     const dryoutHrs = precipToday * 24
     // Figure out rain timing description
     let rainTiming = 'Rain possible'
-    if (precipToday >= 0.05 && precipToday <= 0.1) rainTiming = 'Light rain today'
+    if (precipToday >= 0.05 && precipToday <= 0.1) rainTiming = 'Light rain'
     else if (precipToday > 0.1 && estHrsSinceRain > dryoutHrs * 0.75) rainTiming = 'Drying out'
     else if (precipToday > 0.1) rainTiming = 'Rain earlier'
 
@@ -681,7 +952,8 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
 
   // nogo
   const dryoutHrs = precipToday * 24
-  const estHrsSinceRain = Math.max(1, hourOfDay - 2)
+  // Use precomputed dry streak for future days; fall back to estimate for today
+  const estHrsSinceRain = dryStreakHours != null ? dryStreakHours : Math.max(1, hourOfDay - 2)
   const hoursLeft = Math.max(0, Math.ceil(dryoutHrs - estHrsSinceRain))
   const tiles = []
 
@@ -719,6 +991,7 @@ export default function App() {
   const [airQuality,     setAirQuality]     = useState(null)
   const [dailyForecast,    setDailyForecast]    = useState([])
   const [dailyIntervals,   setDailyIntervals]   = useState([])
+  const [hourlyIntervals,  setHourlyIntervals]  = useState([]) // full hourly timeline for engine
   const [weatherCodeNow,   setWeatherCodeNow]   = useState(null)
   const [precipIntensityNow, setPrecipIntensityNow] = useState(0)
   const [sunTimes,         setSunTimes]         = useState([])
@@ -726,6 +999,14 @@ export default function App() {
   const [refreshPhase,     setRefreshPhase]     = useState('idle') // 'idle' | 'updating' | 'done'
   const [cacheTimestamp,   setCacheTimestamp]   = useState(null)
   const [tick,             setTick]             = useState(0) // increments every min to refresh age label
+
+  // User preferences — initialized from localStorage; persisted on every change.
+  // getPreferences/setPreferences are exported so the bottom sheet UI can use them.
+  const [userPreferences, setUserPreferences] = useState(() => getPreferences())
+
+  // Which day is selected in the week strip (0 = today … 6 = 6 days out).
+  // Resets to 0 whenever fresh weather data loads.
+  const [selectedDay, setSelectedDay] = useState(0)
 
   // Reverse-geocode helper — shared by init and GPS refresh
   const reverseGeocode = async (latitude, longitude) => {
@@ -775,40 +1056,67 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
-  // Apply parsed weather + sun data to state
+  // Apply parsed weather + sun/daily data to state.
+  // Tomorrow.io provides: current conditions + hourly timeline (temp, humidity, precip, weatherCode, epaIndex).
+  // Open-Meteo provides:  7-day daily forecast (tempMax, precip, humidity) + sunrise/sunset.
   const applyData = (weatherRaw, sunRaw, timestamp) => {
     if (weatherRaw) {
       const timelines = weatherRaw?.data?.timelines ?? []
       const current = timelines.find(t => t.timestep === 'current')
       const hourly  = timelines.find(t => t.timestep === '1h')
-      const daily   = timelines.find(t => t.timestep === '1d')
-      const curVals  = current?.intervals?.[0]?.values ?? {}
-      const cur      = hourly?.intervals?.[0]?.values ?? {}
+      const curVals = current?.intervals?.[0]?.values ?? {}
+      const cur     = hourly?.intervals?.[0]?.values  ?? {}
       setCurrentTemp(cur.temperature != null ? Math.round(cur.temperature) : null)
-      setCurrentHumidity(cur.humidity != null ? Math.round(cur.humidity)   : null)
+      setCurrentHumidity(cur.humidity  != null ? Math.round(cur.humidity)  : null)
       setAirQuality(epaLabel(curVals.epaIndex ?? cur.epaIndex))
       setWeatherCodeNow(cur.weatherCode ?? null)
       setPrecipIntensityNow(cur.precipitationIntensity ?? 0)
-      const rawDaily = (daily?.intervals ?? []).slice(0, 7)
+      setHourlyIntervals(hourly?.intervals ?? [])  // full hourly timeline for dryout engine
+    } else {
+      setCurrentTemp(null); setCurrentHumidity(null)
+      setAirQuality(null);  setHourlyIntervals([])
+      setWeatherCodeNow(null); setPrecipIntensityNow(0)
+    }
+
+    if (sunRaw) {
+      const d = sunRaw?.daily ?? {}
+      // Build daily intervals in the same {startTime, values} shape the engine expects,
+      // using Open-Meteo arrays. Append T12:00:00 so dayAbbr() parses as local noon,
+      // avoiding the UTC-midnight off-by-one-day issue with date-only strings.
+      const rawDaily = (d.time ?? []).map((date, i) => ({
+        startTime: `${date}T12:00:00`,
+        values: {
+          temperatureMax:            d.temperature_2m_max?.[i]          ?? null,
+          precipitationAccumulation: d.precipitation_sum?.[i]           ?? null,
+          humidity:                  d.relative_humidity_2m_mean?.[i]   ?? null,
+        },
+      })).slice(0, 7)
+
+      // Log so we can verify 7 rolling days with complete fields
+      console.log('[RSG] Open-Meteo daily — days returned:', rawDaily.length)
+      console.table(rawDaily.map(d => ({
+        date:     d.startTime.slice(0, 10),
+        tempMax:  d.values.temperatureMax            ?? 'MISSING',
+        precip:   d.values.precipitationAccumulation ?? 'MISSING',
+        humidity: d.values.humidity                  ?? 'MISSING',
+      })))
+
       setDailyIntervals(rawDaily)
       setDailyForecast(rawDaily.map(interval => ({
         day:     dayAbbr(interval.startTime),
-        tempMax: interval.values?.temperatureMax != null
-                  ? Math.round(interval.values.temperatureMax) : null,
+        tempMax: interval.values.temperatureMax != null
+                   ? Math.round(interval.values.temperatureMax) : null,
       })))
-    } else {
-      setCurrentTemp(null); setCurrentHumidity(null)
-      setAirQuality(null);  setDailyForecast([])
-      setDailyIntervals([]); setWeatherCodeNow(null); setPrecipIntensityNow(0)
-    }
-    if (sunRaw) {
-      const d = sunRaw?.daily ?? {}
       setSunTimes((d.sunrise ?? []).map((rise, i) => ({ sunrise: rise, sunset: d.sunset?.[i] })))
     } else {
+      setDailyIntervals([])
+      setDailyForecast([])
       setSunTimes([])
     }
+
     setCacheTimestamp(timestamp)
     setWeatherLoading(false)
+    setSelectedDay(0)  // reset to today whenever new data loads
   }
 
   // Shared fetch — checks cache unless force:true (manual refresh)
@@ -828,7 +1136,7 @@ export default function App() {
       setWeatherLoading(true)
       try {
         weatherRaw = await fetch(
-          `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,temperatureMax,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=current,1h,1d&apikey=${apiKey}`
+          `https://api.tomorrow.io/v4/timelines?location=${lat},${lon}&fields=temperature,humidity,precipitationAccumulation,precipitationIntensity,weatherCode,epaIndex&units=imperial&timesteps=current,1h&apikey=${apiKey}`
         ).then(r => r.json())
         writeCache(WEATHER_CACHE_KEY, weatherRaw, lat, lon)
         weatherTimestamp = Date.now()
@@ -846,7 +1154,7 @@ export default function App() {
     } else {
       try {
         sunRaw = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset&timezone=auto&forecast_days=7`
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=auto&forecast_days=7`
         ).then(r => r.json())
         writeCache(SUN_CACHE_KEY, sunRaw, lat, lon)
       } catch {
@@ -942,8 +1250,17 @@ export default function App() {
 
   const verdict = useMemo(() => {
     if (!dailyIntervals.length) return null
-    return computeVerdict({ dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes })
-  }, [dailyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes])
+    return computeVerdict({
+      dailyIntervals,
+      hourlyIntervals,   // [Problem 1 & 2] for rainfall sum + dryout carryover
+      currentTemp,
+      currentHumidity,
+      weatherCodeNow,
+      precipIntensityNow,
+      sunTimes,
+      preferences: userPreferences,  // [PREF] all preference-driven adjustments
+    })
+  }, [dailyIntervals, hourlyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes, userPreferences])
 
   return (
     <>
@@ -1004,36 +1321,46 @@ export default function App() {
             </button>
           </header>
 
-          {/* Verdict card */}
-          <div style={{ background: '#2d4a1e', borderRadius: 22, padding: '20px 20px 22px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-            <div style={{
-              position: 'absolute', top: 14, right: 14,
-              background: 'rgba(255,255,255,0.15)',
-              color: '#e8f5d0', borderRadius: 999,
-              fontSize: 11, fontWeight: 500, padding: '3px 10px',
-            }}>
-              {TODAY_LABEL}
-            </div>
-            <div className="flex items-center gap-3 mt-1">
-              <div style={{
-                width: 36, height: 36,
-                background: 'rgba(255,255,255,0.15)',
-                borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#e8f5d0', fontSize: 18, flexShrink: 0,
-              }}>
-                {verdict?.todayVerdict === 'nogo' ? '✕' : verdict?.todayVerdict === 'caution' ? '!' : '✓'}
-              </div>
-              <div>
-                <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, color: '#e8f5d0', lineHeight: 1.1 }}>
-                  {verdict?.todayVerdict === 'nogo' ? 'Stay home today.' : verdict?.todayVerdict === 'caution' ? 'Ride with care.' : 'Go ride.'}
+          {/* Verdict card — updates to reflect the selected week strip day */}
+          {(() => {
+            const selVerdict = verdict?.weekVerdicts?.[selectedDay] ?? verdict?.todayVerdict
+            const selReason  = verdict?.weekReasons?.[selectedDay]  ?? verdict?.todayReason
+            const selLabel   = selectedDay === 0
+              ? TODAY_LABEL
+              : (dailyForecast[selectedDay]?.day ?? DAY_ABBR[(new Date().getDay() + selectedDay) % 7])
+            const cardBg = selVerdict === 'caution' ? '#7a4a15' : selVerdict === 'nogo' ? '#5c1a1a' : '#2d4a1e'
+            return (
+              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', transition: 'background 0.25s ease' }}>
+                <div style={{
+                  position: 'absolute', top: 14, right: 14,
+                  background: 'rgba(255,255,255,0.15)',
+                  color: '#e8f5d0', borderRadius: 999,
+                  fontSize: 11, fontWeight: 500, padding: '3px 10px',
+                }}>
+                  {selLabel}
                 </div>
-                <div style={{ color: '#a8c882', fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
-                  {verdict?.todayReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
+                <div className="flex items-center gap-3 mt-1">
+                  <div style={{
+                    width: 36, height: 36,
+                    background: 'rgba(255,255,255,0.15)',
+                    borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#e8f5d0', fontSize: 18, flexShrink: 0,
+                  }}>
+                    {selVerdict === 'nogo' ? '✕' : selVerdict === 'caution' ? '!' : '✓'}
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, color: '#e8f5d0', lineHeight: 1.1 }}>
+                      {selVerdict === 'nogo' ? 'Stay home.' : selVerdict === 'caution' ? 'Ride with care.' : 'Go ride.'}
+                    </div>
+                    <div style={{ color: '#a8c882', fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
+                      {selReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
+            )
+          })()}
 
           {/* Week strip — 7-day outlook */}
           <div>
@@ -1041,18 +1368,25 @@ export default function App() {
               This week
             </div>
             <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-              {Array.from({ length: 7 }, (_, i) => {
+              {Array.from({ length: dailyForecast.length > 0 ? dailyForecast.length : 7 }, (_, i) => {
                 const forecast    = dailyForecast[i]
-                const displayDay  = forecast?.day ?? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(new Date().getDay() + i) % 7]
+                const displayDay  = forecast?.day ?? DAY_ABBR[(new Date().getDay() + i) % 7]
                 const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
                 const status      = verdict?.weekVerdicts?.[i] ?? 'go'
-                const active      = i === 0
+                const active      = i === selectedDay
+                const activeBg    = status === 'caution' ? '#7a4a15' : status === 'nogo' ? '#5c1a1a' : '#2d4a1e'
                 return (
-                  <div key={i} style={{
-                    background: active ? '#2d4a1e' : '#ffffff',
-                    borderRadius: 14, padding: '12px 4px', textAlign: 'center',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
-                  }} className="flex flex-col items-center gap-1">
+                  <div key={i}
+                    onClick={() => setSelectedDay(i)}
+                    style={{
+                      background: active ? activeBg : '#ffffff',
+                      borderRadius: 14, padding: '12px 4px', textAlign: 'center',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+                      cursor: 'pointer',
+                      transition: 'background 0.15s ease',
+                    }}
+                    className="flex flex-col items-center gap-1"
+                  >
                     <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
                       {displayDay}
                     </span>
@@ -1073,13 +1407,24 @@ export default function App() {
             </div>
             <div className="grid grid-cols-3 gap-2">
               {buildEvidenceTiles({
-                todayVerdict: verdict?.todayVerdict ?? 'go',
-                dailyIntervals,
-                currentTemp,
-                currentHumidity,
-                airQuality,
-                sunTimes,
-                precipIntensityNow,
+                // Shift dailyIntervals so [0] always refers to the selected day's data
+                todayVerdict:     verdict?.weekVerdicts?.[selectedDay] ?? verdict?.todayVerdict ?? 'go',
+                dailyIntervals:   dailyIntervals.slice(selectedDay),
+                // Today: use live current/hourly values; future days: use daily forecast values
+                currentTemp:      selectedDay === 0 ? currentTemp
+                                  : (dailyIntervals[selectedDay]?.values?.temperatureMax != null
+                                      ? Math.round(dailyIntervals[selectedDay].values.temperatureMax) : null),
+                currentHumidity:  selectedDay === 0 ? currentHumidity
+                                  : (dailyIntervals[selectedDay]?.values?.humidity != null
+                                      ? Math.round(dailyIntervals[selectedDay].values.humidity) : null),
+                airQuality:       selectedDay === 0 ? airQuality
+                                  : (dailyIntervals[selectedDay]?.values?.epaIndex != null
+                                      ? epaLabel(dailyIntervals[selectedDay].values.epaIndex) : 'N/A'),
+                // Slice sunTimes so sunDisplay always reads index [0] as the selected day
+                sunTimes:         sunTimes.slice(selectedDay),
+                precipIntensityNow: selectedDay === 0 ? precipIntensityNow : 0,
+                // Pass precomputed dry streak so future-day tiles show accurate values
+                dryStreakHours:   verdict?.weekDryStreakHrs?.[selectedDay] ?? null,
               }).map(({ icon, name, value, status }) => (
                 <div key={name} style={{
                   background: '#ffffff',
@@ -1110,7 +1455,7 @@ export default function App() {
               Trail tips
             </div>
             <div className="flex flex-col gap-2">
-              {(verdict?.tips ?? ['Loading trail conditions…']).map((tip, i) => (
+              {(verdict?.weekTips?.[selectedDay] ?? verdict?.tips ?? ['Loading trail conditions…']).map((tip, i) => (
                 <div key={i} style={{ background: '#ffffff', borderRadius: 16, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }} className="flex items-start gap-3">
                   <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5a7a3a', flexShrink: 0, marginTop: 5 }} />
                   <span style={{ fontSize: 13, color: '#3a3a2e', lineHeight: 1.5 }}>{tip}</span>
