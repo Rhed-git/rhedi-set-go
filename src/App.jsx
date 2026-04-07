@@ -27,7 +27,7 @@ function SplashScreen() {
     fontSize: 56,
     color: '#f5f2eb',
     lineHeight: 1.1,
-    textAlign: 'center',
+    textAlign: 'left',
     animation: 'slideUpFadeIn 0.5s ease forwards',
   }
 
@@ -40,7 +40,7 @@ function SplashScreen() {
       transition: 'opacity 0.6s ease',
       pointerEvents: fading ? 'none' : 'auto',
     }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
         <span style={wordStyle}>Send</span>
         {showWith       && <span style={wordStyle}>with</span>}
         {showConfidence && <span style={wordStyle}>Confidence</span>}
@@ -51,7 +51,7 @@ function SplashScreen() {
         opacity: showSub ? 0.7 : 0,
         marginTop: 32,
         transition: 'opacity 0.5s ease',
-        textAlign: 'center',
+        textAlign: 'left',
       }}>
         powered by Rhed
       </div>
