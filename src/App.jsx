@@ -434,25 +434,41 @@ function formatTime(isoString) {
 }
 
 function sunDisplay(sunTimes, { forToday = true } = {}) {
-  // Returns { icon, value, label } for the conditions strip
-  if (!sunTimes?.length) return { icon: '🌅', value: '--', label: 'Sunset' }
+  // Returns { icon, value, label, status } for the conditions strip
+  if (!sunTimes?.length) return { icon: '🌅', value: '--', label: 'Sunset', status: 'Neutral' }
   const today = sunTimes[0]
 
-  // Future days always show that day's sunset time
+  // Future days: always show that day's sunset time, neutral status
   if (!forToday) {
-    return { icon: '🌅', value: today.sunset ? formatTime(today.sunset) : '--', label: 'Sunset' }
+    return { icon: '🌅', value: today.sunset ? formatTime(today.sunset) : '--', label: 'Sunset', status: 'Neutral' }
   }
 
   const now  = new Date()
   const rise = new Date(today.sunrise)
   const set  = new Date(today.sunset)
 
-  if (now < rise) return { icon: '🌄', value: formatTime(today.sunrise), label: 'Sunrise' }
-  if (now < set)  return { icon: '🌅', value: formatTime(today.sunset),  label: 'Sunset' }
-  // After sunset — show tomorrow's sunrise if available
+  // Before sunrise — show today's sunrise time
+  if (now < rise) return { icon: '🌄', value: formatTime(today.sunrise), label: 'Sunrise', status: 'Neutral' }
+
+  // Between sunrise and sunset — show time remaining with urgency glow
+  if (now < set) {
+    const hrsLeft  = (set - now) / 3600000
+    const minsLeft = Math.round(hrsLeft * 60)
+    if (hrsLeft >= 4) {
+      return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset', status: 'Ideal' }
+    }
+    if (hrsLeft >= 2) {
+      const h = Math.floor(hrsLeft)
+      const m = Math.round((hrsLeft - h) * 60)
+      return { icon: '🌅', value: `${h}h ${m}m left`, label: 'Sunset', status: 'Good' }
+    }
+    return { icon: '🌅', value: `${minsLeft}m left`, label: 'Sunset', status: 'Marginal' }
+  }
+
+  // After sunset — show tomorrow's sunrise, neutral
   const tomorrow = sunTimes[1]
-  if (tomorrow) return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Sunrise' }
-  return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
+  if (tomorrow) return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Sunrise', status: 'Neutral' }
+  return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset', status: 'Neutral' }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -923,9 +939,10 @@ function precipProbStatus(prob) {
 
 function uvStatus(val) {
   if (val == null) return 'Neutral'
-  if (val <= 2)  return 'Neutral'
-  if (val <= 5)  return 'Good'
-  if (val <= 7)  return 'Marginal'
+  const n = Math.round(val)   // align with uvLabel which also rounds
+  if (n <= 2)  return 'Neutral'
+  if (n <= 5)  return 'Good'
+  if (n <= 7)  return 'Marginal'
   return 'Blocking'
 }
 
@@ -941,9 +958,9 @@ function uvLabel(val) {
 
 function windStatus(mph) {
   if (mph == null) return 'Neutral'
-  if (mph < 10)  return 'Neutral'
-  if (mph < 20)  return 'Good'
-  if (mph < 30)  return 'Marginal'
+  if (mph <= 8)  return 'Ideal'
+  if (mph <= 15) return 'Good'
+  if (mph <= 25) return 'Marginal'
   return 'Blocking'
 }
 
@@ -978,7 +995,7 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
   const now = new Date()
   const hourOfDay = now.getHours() + now.getMinutes() / 60
 
-  const rideWindowTile = { icon: sun.icon, name: sun.label, value: sun.value, status: 'Neutral' }
+  const rideWindowTile = { icon: sun.icon, name: sun.label, value: sun.value, status: sun.status }
 
   if (todayVerdict === 'go') {
     // Use precomputed dry streak for future days; fall back to estimate for today
