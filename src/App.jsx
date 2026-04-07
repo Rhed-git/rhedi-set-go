@@ -952,19 +952,19 @@ function dryStreakDisplay(hrs) {
   const days    = hrs / 24
   const rounded = Math.round(days * 4) / 4
   // Under 6 hrs (rounded < 0.25) show raw hours; everything else shows as days
-  if (rounded < 0.25) return `${Math.round(hrs)} hrs dry`
+  if (rounded < 0.25) return `${Math.round(hrs)} hrs`
   const label = rounded === 1 ? 'day' : 'days'
   // Trim trailing zeros: 2.00 → "2", 1.50 → "1.5", 1.25 → "1.25"
   const num = rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '')
-  return `${num} ${label} dry`
+  return `${num} ${label}`
 }
 
 function tileGlow(status) {
   const outer = '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)'
-  if (status === 'Ideal')    return `${outer}, inset 0 0 0 3px rgba(45,74,30,0.35), inset 0 0 20px rgba(45,74,30,0.15)`
-  if (status === 'Good')     return `${outer}, inset 0 0 0 3px rgba(90,122,58,0.3), inset 0 0 16px rgba(90,122,58,0.12)`
-  if (status === 'Marginal') return `${outer}, inset 0 0 0 3px rgba(186,117,23,0.4), inset 0 0 20px rgba(186,117,23,0.15)`
-  if (status === 'Blocking') return `${outer}, inset 0 0 0 3px rgba(163,45,45,0.4), inset 0 0 20px rgba(163,45,45,0.15)`
+  if (status === 'Ideal')    return `${outer}, inset 0 0 0 3px rgba(34,197,94,0.5), inset 0 0 24px rgba(34,197,94,0.2)`
+  if (status === 'Good')     return `${outer}, inset 0 0 0 3px rgba(134,239,172,0.6), inset 0 0 20px rgba(134,239,172,0.25)`
+  if (status === 'Marginal') return `${outer}, inset 0 0 0 3px rgba(251,191,36,0.6), inset 0 0 24px rgba(251,191,36,0.2)`
+  if (status === 'Blocking') return `${outer}, inset 0 0 0 3px rgba(239,68,68,0.55), inset 0 0 24px rgba(239,68,68,0.2)`
   return outer // Neutral — plain white tile
 }
 
