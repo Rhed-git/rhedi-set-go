@@ -948,12 +948,24 @@ function windStatus(mph) {
   return 'Blocking'
 }
 
+function dryStreakDisplay(hrs) {
+  if (hrs == null) return '--'
+  const days    = hrs / 24
+  const rounded = Math.round(days * 4) / 4
+  // Under 6 hrs (rounded < 0.25) show raw hours; everything else shows as days
+  if (rounded < 0.25) return `${Math.round(hrs)} hrs dry`
+  const label = rounded === 1 ? 'day' : 'days'
+  // Trim trailing zeros: 2.00 → "2", 1.50 → "1.5", 1.25 → "1.25"
+  const num = rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '')
+  return `${num} ${label} dry`
+}
+
 function tileGlow(status) {
   const outer = '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)'
-  if (status === 'Ideal')    return `${outer}, inset 0 0 0 2px rgba(45,74,30,0.15), inset 0 0 12px rgba(45,74,30,0.08)`
-  if (status === 'Good')     return `${outer}, inset 0 0 0 2px rgba(90,122,58,0.12), inset 0 0 10px rgba(90,122,58,0.06)`
-  if (status === 'Marginal') return `${outer}, inset 0 0 0 2px rgba(186,117,23,0.2), inset 0 0 12px rgba(186,117,23,0.1)`
-  if (status === 'Blocking') return `${outer}, inset 0 0 0 2px rgba(163,45,45,0.2), inset 0 0 12px rgba(163,45,45,0.1)`
+  if (status === 'Ideal')    return `${outer}, inset 0 0 0 3px rgba(45,74,30,0.35), inset 0 0 20px rgba(45,74,30,0.15)`
+  if (status === 'Good')     return `${outer}, inset 0 0 0 3px rgba(90,122,58,0.3), inset 0 0 16px rgba(90,122,58,0.12)`
+  if (status === 'Marginal') return `${outer}, inset 0 0 0 3px rgba(186,117,23,0.4), inset 0 0 20px rgba(186,117,23,0.15)`
+  if (status === 'Blocking') return `${outer}, inset 0 0 0 3px rgba(163,45,45,0.4), inset 0 0 20px rgba(163,45,45,0.15)`
   return outer // Neutral — plain white tile
 }
 
@@ -981,7 +993,7 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
       { icon: '🌤️', name: 'Forecast',       value: precipValue,                                                     status: precipSt },
       { icon: '🌡️', name: 'Temperature',    value: currentTemp     != null ? `${currentTemp}°F` : '--',             status: tempStatus(currentTemp) },
       { icon: '💧', name: 'Humidity',        value: currentHumidity != null ? `${currentHumidity}%` : '--',         status: humidityStatus(currentHumidity) },
-      { icon: '⏱️', name: 'Dry Streak',      value: `${Math.round(dryHrs)} hrs dry`,                                status: dryStreakStatus(dryHrs) },
+      { icon: '⏱️', name: 'Dry Streak',      value: dryStreakDisplay(dryHrs),                                       status: dryStreakStatus(dryHrs) },
       { icon: '🌱', name: 'Trail Moisture',  value: moisture.value,                                                  status: moisture.status },
       { icon: '🌿', name: 'Air Quality',     value: airQuality ?? '--',                                              status: aqiStatus(airQuality) },
       { icon: '🔆', name: 'UV Index',        value: uvLabel(uvIndex),                                                status: uvStatus(uvIndex) },
