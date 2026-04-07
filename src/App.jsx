@@ -88,7 +88,7 @@ const NOMINATIM_HEADERS = { 'User-Agent': 'RhediSetGo/1.0' }
 // ─── Cache helpers ────────────────────────────────────────────────────────────
 
 const WEATHER_CACHE_KEY = 'rsg_weather_cache'
-const SUN_CACHE_KEY     = 'rsg_daily_cache_v5' // v5: added precip probability, uv_index, wind_speed_10m
+const SUN_CACHE_KEY     = 'rsg_daily_cache_v6' // v6: expanded hourly fields, index-based UV/wind extraction
 const AQI_CACHE_KEY     = 'rsg_aqi_cache_v2'   // v2: expanded to 7 days for per-day AQI
 const WEATHER_MAX_AGE   = 30 * 60 * 1000      // 30 min
 const AQI_MAX_AGE       = 30 * 60 * 1000      // 30 min
@@ -433,25 +433,25 @@ function formatTime(isoString) {
   return `${h}:${String(m).padStart(2, '0')}${ampm}`
 }
 
-function sunDisplay(sunTimes) {
+function sunDisplay(sunTimes, { forToday = true } = {}) {
   // Returns { icon, value, label } for the conditions strip
   if (!sunTimes?.length) return { icon: '🌅', value: '--', label: 'Sunset' }
-  const now = new Date()
   const today = sunTimes[0]
-  const rise  = new Date(today.sunrise)
-  const set   = new Date(today.sunset)
 
-  if (now < rise) {
-    return { icon: '🌄', value: formatTime(today.sunrise), label: 'Sunrise' }
+  // Future days always show that day's sunset time
+  if (!forToday) {
+    return { icon: '🌅', value: today.sunset ? formatTime(today.sunset) : '--', label: 'Sunset' }
   }
-  if (now < set) {
-    return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
-  }
+
+  const now  = new Date()
+  const rise = new Date(today.sunrise)
+  const set  = new Date(today.sunset)
+
+  if (now < rise) return { icon: '🌄', value: formatTime(today.sunrise), label: 'Sunrise' }
+  if (now < set)  return { icon: '🌅', value: formatTime(today.sunset),  label: 'Sunset' }
   // After sunset — show tomorrow's sunrise if available
   const tomorrow = sunTimes[1]
-  if (tomorrow) {
-    return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Tmrw sunrise' }
-  }
+  if (tomorrow) return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Tmrw Sunrise' }
   return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
 }
 
@@ -948,17 +948,26 @@ function windStatus(mph) {
   return 'Blocking'
 }
 
+function tileGlow(status) {
+  const outer = '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)'
+  if (status === 'Ideal')    return `${outer}, inset 0 0 0 2px rgba(45,74,30,0.15), inset 0 0 12px rgba(45,74,30,0.08)`
+  if (status === 'Good')     return `${outer}, inset 0 0 0 2px rgba(90,122,58,0.12), inset 0 0 10px rgba(90,122,58,0.06)`
+  if (status === 'Marginal') return `${outer}, inset 0 0 0 2px rgba(186,117,23,0.2), inset 0 0 12px rgba(186,117,23,0.1)`
+  if (status === 'Blocking') return `${outer}, inset 0 0 0 2px rgba(163,45,45,0.2), inset 0 0 12px rgba(163,45,45,0.1)`
+  return outer // Neutral — plain white tile
+}
+
 // dryStreakHours: optional override for the dry-streak tile (passed for future days
 // from the per-day dryStreakHrs computed in computeVerdict). When null/undefined the
 // function falls back to its original same-day estimation logic.
-function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours, uvIndex, windSpeed }) {
-  const sun = sunDisplay(sunTimes)
+function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours, uvIndex, windSpeed, isToday = true }) {
+  const sun = sunDisplay(sunTimes, { forToday: isToday })
   const precipToday = dailyIntervals[0]?.values?.precipitationAccumulation ?? 0
   const precipProb  = dailyIntervals[0]?.values?.precipProbability ?? null
   const now = new Date()
   const hourOfDay = now.getHours() + now.getMinutes() / 60
 
-  const rideWindowTile = { icon: sun.icon, name: 'Ride Window', value: sun.value, status: 'Neutral' }
+  const rideWindowTile = { icon: sun.icon, name: sun.label, value: sun.value, status: 'Neutral' }
 
   if (todayVerdict === 'go') {
     // Use precomputed dry streak for future days; fall back to estimate for today
@@ -1156,22 +1165,18 @@ export default function App() {
     // --- Open-Meteo: 7-day daily forecast + sunrise/sunset + hourly UV/wind ---
     if (sunRaw) {
       const d = sunRaw?.daily ?? {}
-      const hourlyTimes = sunRaw?.hourly?.time ?? []
-      const hourlyUV    = sunRaw?.hourly?.uv_index ?? []
-      const hourlyWind  = sunRaw?.hourly?.wind_speed_10m ?? []
-      const now2 = new Date()
-      const pad2 = n => String(n).padStart(2, '0')
-      // Today's current-hour UV and wind
-      const curHourStr = `${now2.getFullYear()}-${pad2(now2.getMonth() + 1)}-${pad2(now2.getDate())}T${pad2(now2.getHours())}:00`
-      const curHIdx = hourlyTimes.findIndex(t => t === curHourStr)
-      setUvIndexNow(curHIdx >= 0 ? hourlyUV[curHIdx] : null)
-      setWindSpeedNow(curHIdx >= 0 ? hourlyWind[curHIdx] : null)
+      const hourlyUV   = sunRaw?.hourly?.uv_index ?? []
+      const hourlyWind = sunRaw?.hourly?.wind_speed_10m ?? []
+      // Today's current-hour values: hourly array starts at midnight local, so hour index = getHours()
+      const curHIdx = new Date().getHours()
+      setUvIndexNow(hourlyUV[curHIdx]   ?? null)
+      setWindSpeedNow(hourlyWind[curHIdx] ?? null)
       // Build daily intervals in the same {startTime, values} shape the engine expects,
       // using Open-Meteo arrays. Append T12:00:00 so dayAbbr() parses as local noon,
       // avoiding the UTC-midnight off-by-one-day issue with date-only strings.
+      // Noon of day i is at hourly index i*24+12 (each day has exactly 24 entries).
       const rawDaily = (d.time ?? []).map((date, i) => {
-        const noonStr = `${date}T12:00`
-        const noonIdx = hourlyTimes.findIndex(t => t === noonStr)
+        const noonIdx = i * 24 + 12
         return {
           startTime: `${date}T12:00:00`,
           values: {
@@ -1179,8 +1184,8 @@ export default function App() {
             precipitationAccumulation: d.precipitation_sum?.[i]              ?? null,
             humidity:                  d.relative_humidity_2m_mean?.[i]      ?? null,
             precipProbability:         d.precipitation_probability_max?.[i]  ?? null,
-            uvIndex:                   noonIdx >= 0 ? hourlyUV[noonIdx]      : null,
-            windSpeed:                 noonIdx >= 0 ? hourlyWind[noonIdx]    : null,
+            uvIndex:                   hourlyUV[noonIdx]                     ?? null,
+            windSpeed:                 hourlyWind[noonIdx]                   ?? null,
           },
         }
       }).slice(0, 7)
@@ -1240,7 +1245,7 @@ export default function App() {
     } else {
       try {
         sunRaw = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean,precipitation_probability_max&hourly=uv_index,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7`
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=sunrise,sunset,temperature_2m_max,precipitation_sum,relative_humidity_2m_mean,precipitation_probability_max&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,uv_index,weathercode&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=auto&forecast_days=7`
         ).then(r => r.json())
         writeCache(SUN_CACHE_KEY, sunRaw, lat, lon)
       } catch {
@@ -1528,20 +1533,18 @@ export default function App() {
                 dryStreakHours:   verdict?.weekDryStreakHrs?.[selectedDay] ?? null,
                 uvIndex:          selectedDay === 0 ? uvIndexNow   : (dailyIntervals[selectedDay]?.values?.uvIndex   ?? null),
                 windSpeed:        selectedDay === 0 ? windSpeedNow : (dailyIntervals[selectedDay]?.values?.windSpeed ?? null),
+                isToday:          selectedDay === 0,
               }).map(({ icon, name, value, status }) => (
                 <div key={name} style={{
                   background: '#ffffff',
                   borderRadius: 14,
                   padding: '14px 10px 12px',
-                  boxShadow: '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)',
+                  boxShadow: tileGlow(status),
                   textAlign: 'center',
                 }} className="flex flex-col items-center gap-1">
                   <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
                   <span style={{ fontSize: 9, fontWeight: 600, color: '#8a8475', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 4 }}>{name}</span>
                   <span style={{ fontSize: 14, fontWeight: 700, color: '#2c2c1e', marginTop: 2 }}>{value}</span>
-                  <div style={{ marginTop: 6 }}>
-                    <StatusPill status={status} />
-                  </div>
                 </div>
               ))}
             </div>
