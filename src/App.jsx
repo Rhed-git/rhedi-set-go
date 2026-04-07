@@ -42,8 +42,8 @@ function SplashScreen() {
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
         <span style={wordStyle}>Send</span>
-        {showWith       && <span style={wordStyle}>with</span>}
-        {showConfidence && <span style={wordStyle}>Confidence</span>}
+        <span style={{ ...wordStyle, ...(showWith       ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>with</span>
+        <span style={{ ...wordStyle, ...(showConfidence ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>Confidence</span>
       </div>
       <div style={{
         fontFamily: "'DM Sans', sans-serif",
