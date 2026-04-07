@@ -451,7 +451,7 @@ function sunDisplay(sunTimes, { forToday = true } = {}) {
   if (now < set)  return { icon: '🌅', value: formatTime(today.sunset),  label: 'Sunset' }
   // After sunset — show tomorrow's sunrise if available
   const tomorrow = sunTimes[1]
-  if (tomorrow) return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Tmrw Sunrise' }
+  if (tomorrow) return { icon: '🌄', value: formatTime(tomorrow.sunrise), label: 'Sunrise' }
   return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset' }
 }
 
@@ -771,9 +771,8 @@ function computeVerdict({
     }
 
     // Tip: sunset/sunrise timing
-    if (sun.label === 'Sunset')       tips.push(`Sunset at ${sun.value}. Plenty of daylight — no need to rush your start.`)
-    else if (sun.label === 'Sunrise') tips.push(`Sunrise at ${sun.value}. Early starters get the freshest trail conditions.`)
-    else                              tips.push(`${sun.label} at ${sun.value}.`)
+    if (sun.label === 'Sunset')  tips.push(`Sunset at ${sun.value}. Plenty of daylight — no need to rush your start.`)
+    else                         tips.push(`Sunrise at ${sun.value}. Early starters get the freshest trail conditions.`)
 
   } else if (todayVerdict === 'caution') {
     tips.push(todayReason)
