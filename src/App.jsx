@@ -40,20 +40,22 @@ function SplashScreen() {
       transition: 'opacity 0.6s ease',
       pointerEvents: fading ? 'none' : 'auto',
     }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
-        <span style={wordStyle}>Send</span>
-        <span style={{ ...wordStyle, ...(showWith       ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>with</span>
-        <span style={{ ...wordStyle, ...(showConfidence ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>Confidence</span>
-      </div>
-      <div style={{
-        fontFamily: "'DM Sans', sans-serif",
-        fontSize: 15, color: '#f5f2eb',
-        opacity: showSub ? 0.7 : 0,
-        marginTop: 32,
-        transition: 'opacity 0.5s ease',
-        textAlign: 'left',
-      }}>
-        powered by Rhed
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0 }}>
+          <span style={wordStyle}>Send</span>
+          <span style={{ ...wordStyle, ...(showWith       ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>with</span>
+          <span style={{ ...wordStyle, ...(showConfidence ? {} : { animation: 'none', height: 0, overflow: 'hidden', visibility: 'hidden' }) }}>Confidence</span>
+        </div>
+        <div style={{
+          alignSelf: 'flex-end',
+          fontFamily: "'DM Sans', sans-serif",
+          fontSize: 15, color: '#f5f2eb',
+          opacity: showSub ? 0.7 : 0,
+          marginTop: 32,
+          transition: 'opacity 0.5s ease',
+        }}>
+          powered by Rhed
+        </div>
       </div>
     </div>
   )
