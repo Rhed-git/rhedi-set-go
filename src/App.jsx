@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import './App.css'
 
 // Splash timing (ms):
-// 0 → Rhedi, 600 → Set, 1200 → Go, 1600 → slogan, 2600 → fade out, 3200 → remove
+// 0 → Send, 600 → with, 1200 → Confidence, 1600 → subtext, 2600 → fade out, 3200 → remove
 
 function SplashScreen() {
   const [showWith,       setShowWith]       = useState(false)
@@ -134,7 +133,7 @@ const defaultPreferences = {
 }
 
 // Returns merged preferences from localStorage + defaults.
-// The bottom sheet settings UI will call this when it renders.
+// The Settings island UI will call this when it renders.
 function getPreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(PREFS_STORAGE_KEY) ?? 'null')
@@ -145,7 +144,7 @@ function getPreferences() {
 }
 
 // Persists preferences to localStorage.
-// The bottom sheet settings UI will call this when a preference changes.
+// The Settings island UI will call this when a preference changes.
 function setPreferences(prefs) {
   try {
     localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs))
@@ -242,7 +241,7 @@ function LocationSearch({ gpsCoords, onSelect, onUseGPS }) {
 
 // ─── Shared icons ─────────────────────────────────────────────────────────────
 
-function PinIcon({ color = '#5a7a3a' }) {
+function PinIcon({ color = '#f07820' }) {
   return (
     <svg width="13" height="16" viewBox="0 0 13 16" fill="none" style={{ flexShrink: 0 }}>
       <path d="M6.5 0C3.186 0 .5 2.686.5 6c0 4.5 6 10 6 10s6-5.5 6-10c0-3.314-2.686-6-6-6zm0 8.5A2.5 2.5 0 1 1 6.5 3.5 2.5 2.5 0 0 1 6.5 8.5z" fill={color}/>
@@ -379,10 +378,12 @@ function BottomNav({ onNavigate }) {
 }
 
 // ─── Sheet ────────────────────────────────────────────────────────────────────
-// Generic bottom sheet. Single instance in App; renders content based on
+// Generic floating island. Single instance in App; renders content based on
 // `target` ('activity' | 'location' | 'settings' | 'profile' | null).
-// Drag handle (visual only) + X button close. Overlay tap also closes.
-// No Done button. Slide-up translateY animation, 300ms ease.
+// Centered floating card over a blurred overlay — not a bottom sheet.
+// Spring scale-in on open via the islandSpringIn keyframe; quick ease-out
+// fade on close. X button in the header closes; overlay tap also closes.
+// No drag handle (drag handles belong to bottom sheets, not islands).
 
 const SHEET_TITLES = {
   activity: 'Activity',
@@ -621,9 +622,9 @@ function sunDisplay(sunTimes, { forToday = true } = {}) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function StatusDot({ status }) {
-  if (status === 'go')      return <span style={{ color: '#5a7a3a' }} className="text-lg">✓</span>
-  if (status === 'caution') return <span style={{ color: '#c97c2a' }} className="text-lg">!</span>
-  return                           <span style={{ color: '#c0392b' }} className="text-lg">✕</span>
+  if (status === 'go')      return <span style={{ color: '#4caf6a' }} className="text-lg">✓</span>
+  if (status === 'caution') return <span style={{ color: '#e8a020' }} className="text-lg">!</span>
+  return                           <span style={{ color: '#e04848' }} className="text-lg">✕</span>
 }
 
 // ─── Decision Engine ──────────────────────────────────────────────────────────
@@ -1007,27 +1008,6 @@ function computeVerdict({
 
 // ─── Evidence Panel helpers ───────────────────────────────────────────────
 
-const PILL_STYLES = {
-  Ideal:    { background: '#d4edda', color: '#155724' },
-  Good:     { background: '#e8f5d0', color: '#3a7a1e' },
-  Marginal: { background: '#fff3cd', color: '#856404' },
-  Blocking: { background: '#f8d7da', color: '#721c24' },
-  Neutral:  { background: '#e9e5de', color: '#6c6860' },
-}
-
-function StatusPill({ status }) {
-  const s = PILL_STYLES[status] ?? PILL_STYLES.Neutral
-  return (
-    <span style={{
-      ...s, fontSize: 10, fontWeight: 600,
-      padding: '3px 10px', borderRadius: 999,
-      textTransform: 'uppercase', letterSpacing: '0.04em',
-    }}>
-      {status}
-    </span>
-  )
-}
-
 function humidityStatus(h) {
   if (h == null) return 'Neutral'
   if (h < 60) return 'Ideal'
@@ -1121,15 +1101,6 @@ function dryStreakDisplay(hrs) {
   // Trim trailing zeros: 2.00 → "2", 1.50 → "1.5", 1.25 → "1.25"
   const num = rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '')
   return `${num} ${label}`
-}
-
-function tileGlow(status) {
-  const outer = '0 1px 4px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04)'
-  if (status === 'Ideal')    return `${outer}, inset 0 0 0 3px rgba(34,197,94,0.5), inset 0 0 24px rgba(34,197,94,0.2)`
-  if (status === 'Good')     return `${outer}, inset 0 0 0 3px rgba(134,239,172,0.6), inset 0 0 20px rgba(134,239,172,0.25)`
-  if (status === 'Marginal') return `${outer}, inset 0 0 0 3px rgba(251,191,36,0.6), inset 0 0 24px rgba(251,191,36,0.2)`
-  if (status === 'Blocking') return `${outer}, inset 0 0 0 3px rgba(239,68,68,0.55), inset 0 0 24px rgba(239,68,68,0.2)`
-  return outer // Neutral — plain white tile
 }
 
 // dryStreakHours: optional override for the dry-streak tile (passed for future days
@@ -1240,7 +1211,7 @@ export default function App() {
   const [tick,             setTick]             = useState(0) // increments every min to refresh age label
 
   // User preferences — initialized from localStorage; persisted on every change.
-  // getPreferences/setPreferences are exported so the bottom sheet UI can use them.
+  // getPreferences/setPreferences are exported so the Settings island UI can use them.
   const [userPreferences, setUserPreferences] = useState(() => getPreferences())
 
   // Which day is selected in the week strip (0 = today … 6 = 6 days out).
@@ -1602,7 +1573,7 @@ export default function App() {
             const cardBg = selVerdict === 'caution' ? '#7a4a15' : selVerdict === 'nogo' ? '#5c1a1a' : '#2d4a1e'
             const verdictChar = selVerdict === 'nogo' ? '✕' : selVerdict === 'caution' ? '!' : '✓'
             return (
-              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', transition: 'background 0.25s ease' }}>
+              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', overflow: 'hidden', transition: 'background 0.25s ease' }}>
                 {/* Watermark — large faded verdict glyph behind content */}
                 <div style={{
                   position: 'absolute', right: -20, bottom: -40,
@@ -1619,7 +1590,7 @@ export default function App() {
                 <div style={{
                   position: 'absolute', top: 14, right: 14,
                   background: 'rgba(255,255,255,0.15)',
-                  color: '#e8f5d0', borderRadius: 999,
+                  color: '#f0f0f0', borderRadius: 999,
                   fontSize: 11, fontWeight: 500, padding: '3px 10px',
                 }}>
                   {selLabel}
@@ -1630,7 +1601,7 @@ export default function App() {
                     background: 'rgba(255,255,255,0.15)',
                     borderRadius: '50%',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#e8f5d0', fontSize: 18, flexShrink: 0,
+                    color: '#f0f0f0', fontSize: 18, flexShrink: 0,
                   }}>
                     {verdictChar}
                   </div>
@@ -1735,8 +1706,9 @@ export default function App() {
               })}
             </div>
             {cacheTimestamp && (
-              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: 'rgba(240, 240, 240, 0.35)', fontFamily: "'DM Sans', sans-serif" }}>
-                {tick >= 0 && cacheAgeLabel(cacheTimestamp)}
+              <div data-tick={tick} style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: 'rgba(240, 240, 240, 0.35)', fontFamily: "'DM Sans', sans-serif" }}>
+                {/* tick read here to trigger re-render every minute */}
+                {cacheAgeLabel(cacheTimestamp)}
               </div>
             )}
           </div>
