@@ -1,11 +1,20 @@
 @import "tailwindcss";
 
+@theme {
+  --color-bg: #111111;
+  --color-surface: #1c1c1c;
+  --color-surface-alt: #222222;
+  --color-ink: #f0f0f0;
+  --color-muted: rgba(240, 240, 240, 0.35);
+  --color-brand: #f07820;
+}
+
 html {
-  background-color: #f5f2eb;
+  background-color: #111111;
 }
 
 body {
-  background-color: #f5f2eb;
+  background-color: #111111;
 }
 
 input, textarea, select {
@@ -25,5 +34,16 @@ input, textarea, select {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes islandSpringIn {
+  from {
+    opacity: 0;
+    transform: scale(0.93) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }

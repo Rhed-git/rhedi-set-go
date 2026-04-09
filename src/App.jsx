@@ -25,7 +25,7 @@ function SplashScreen() {
   const wordStyle = {
     fontFamily: "'DM Serif Display', serif",
     fontSize: 56,
-    color: '#f5f2eb',
+    color: '#f07820',
     lineHeight: 1.1,
     textAlign: 'left',
     animation: 'slideUpFadeIn 0.5s ease forwards',
@@ -34,7 +34,7 @@ function SplashScreen() {
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: '#2d4a1e',
+      background: '#111111',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       opacity: fading ? 0 : 1,
       transition: 'opacity 0.6s ease',
@@ -49,8 +49,9 @@ function SplashScreen() {
         <div style={{
           alignSelf: 'flex-end',
           fontFamily: "'DM Sans', sans-serif",
-          fontSize: 15, color: '#f5f2eb',
-          opacity: showSub ? 0.7 : 0,
+          fontSize: 15,
+          color: 'rgba(240, 240, 240, 0.45)',
+          opacity: showSub ? 1 : 0,
           marginTop: 32,
           transition: 'opacity 0.5s ease',
         }}>
@@ -159,9 +160,9 @@ function formatResult(item) {
   return { label: city && abbr ? `${city}, ${abbr}` : parts.slice(0, 2).join(', '), lat: item.lat, lon: item.lon }
 }
 
-// ─── LocationSearch (inline, used inside sheet) ───────────────────────────────
+// ─── LocationSearch (inline, used inside Location sheet) ─────────────────────
 
-function LocationSearch({ gpsCoords, onSelect, onClose, onUseGPS }) {
+function LocationSearch({ gpsCoords, onSelect, onUseGPS }) {
   const [query,   setQuery]   = useState('')
   const [results, setResults] = useState([])
   const inputRef = useRef(null)
@@ -185,60 +186,49 @@ function LocationSearch({ gpsCoords, onSelect, onClose, onUseGPS }) {
 
   return (
     <div style={{ position: 'relative' }}>
-      <div className="flex items-center gap-2">
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search city or zip code..."
-          style={{
-            flex: 1,
-            background: '#f8f6f2',
-            border: '1.5px solid #5a7a3a',
-            borderRadius: 10,
-            padding: '9px 12px',
-            fontSize: 14,
-            color: '#2c2c1e',
-            outline: 'none',
-            fontFamily: "'DM Sans', sans-serif",
-          }}
-        />
-        <button
-          onClick={onClose}
-          style={{
-            width: 32, height: 32, borderRadius: '50%',
-            background: '#ece8e0', border: 'none', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 14, color: '#5c5a50', flexShrink: 0,
-          }}
-        >✕</button>
-      </div>
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder="Search city or zip code..."
+        style={{
+          width: '100%',
+          background: '#222222',
+          border: '1px solid rgba(240, 240, 240, 0.18)',
+          borderRadius: 10,
+          padding: '11px 14px',
+          fontSize: 14,
+          color: '#f0f0f0',
+          outline: 'none',
+          fontFamily: "'DM Sans', sans-serif",
+        }}
+      />
 
       {(results.length > 0 || gpsCoords) && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 200,
-          background: '#ffffff',
+          background: '#222222',
           borderRadius: 12,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
           overflow: 'hidden',
         }}>
           {gpsCoords && (
             <button onClick={onUseGPS} style={{
               width: '100%', textAlign: 'left', background: 'none', border: 'none',
-              padding: '12px 14px', cursor: 'pointer', borderBottom: '1px solid #f0ece4',
+              padding: '12px 14px', cursor: 'pointer', borderBottom: '1px solid rgba(240, 240, 240, 0.12)',
               display: 'flex', alignItems: 'center', gap: 8,
-              fontSize: 13, color: '#5a7a3a', fontWeight: 600,
+              fontSize: 13, color: '#f07820', fontWeight: 600,
               fontFamily: "'DM Sans', sans-serif",
             }}>
-              <PinIcon /> Use my location
+              <PinIcon color="#f07820" /> Use my location
             </button>
           )}
           {results.map((r, i) => (
             <button key={i} onClick={() => onSelect(r)} style={{
               width: '100%', textAlign: 'left', background: 'none', border: 'none',
               padding: '12px 14px', cursor: 'pointer',
-              borderBottom: i < results.length - 1 ? '1px solid #f0ece4' : 'none',
-              fontSize: 13, color: '#2c2c1e',
+              borderBottom: i < results.length - 1 ? '1px solid rgba(240, 240, 240, 0.12)' : 'none',
+              fontSize: 13, color: '#f0f0f0',
               fontFamily: "'DM Sans', sans-serif",
             }}>
               {r.label}
@@ -260,151 +250,306 @@ function PinIcon({ color = '#5a7a3a' }) {
   )
 }
 
-// ─── BottomSheet ──────────────────────────────────────────────────────────────
+// ─── TrailTipsIsland ──────────────────────────────────────────────────────────
+// Floating, fully rounded modal. Spring scale-in on open (CSS keyframe in
+// index.css), quick ease-out fade on close (transition rule). Overlay tap
+// dismisses; tap inside the island stops propagation. No close button.
 
-const SECTION_LABEL = {
-  fontSize: 10, fontWeight: 700, letterSpacing: '0.12em',
-  color: '#8a8475', textTransform: 'uppercase', marginBottom: 12,
+function TrailTipsIsland({ open, tips, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 60,
+        background: 'rgba(0, 0, 0, 0.45)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24,
+        opacity: open ? 1 : 0,
+        pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 180ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#1c1c1c',
+          borderRadius: 24,
+          padding: '22px 22px 24px',
+          width: '100%',
+          maxWidth: 340,
+          opacity: open ? 1 : 0,
+          transform: open ? 'scale(1) translateY(0)' : 'scale(0.93) translateY(12px)',
+          transition: 'opacity 180ms ease-out, transform 180ms ease-out',
+          animation: open ? 'islandSpringIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+        }}
+      >
+        <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 22, color: '#f0f0f0', lineHeight: 1.1, marginBottom: 14 }}>
+          Trail tips
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {tips.map((tip, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f07820', flexShrink: 0, marginTop: 7 }} />
+              <span style={{ fontSize: 13, color: '#f0f0f0', lineHeight: 1.5 }}>{tip}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
-const DIVIDER = { height: 1, background: '#ece8e0', margin: '20px 0' }
+// ─── BottomNav ────────────────────────────────────────────────────────────────
+// Fixed bottom nav with 4 icon-only buttons. All icons orange #f07820.
+// Each button sets `navTarget`, which the Sheet component reads to render
+// the matching content slot.
 
-function BottomSheet({ open, onClose, locationName, gpsCoords, onSelectLocation, onUseGPS }) {
-  const [searching, setSearching] = useState(false)
+function BikeIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f07820" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="5.5" cy="17.5" r="3.5"/>
+      <circle cx="18.5" cy="17.5" r="3.5"/>
+      <path d="M5.5 17.5 L10 9 L17 9"/>
+      <path d="M10 9 L13.5 17.5"/>
+      <path d="M17 9 L18.5 17.5"/>
+      <path d="M14 6 L17 6"/>
+    </svg>
+  )
+}
 
-  // Reset search state whenever sheet closes
-  useEffect(() => { if (!open) setSearching(false) }, [open])
+function LocationPinIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f07820" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2 C8 2 5 5 5 9 c0 5 7 13 7 13 s7-8 7-13 c0-4-3-7-7-7z"/>
+      <circle cx="12" cy="9" r="2.5"/>
+    </svg>
+  )
+}
 
+function GearIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f07820" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  )
+}
+
+function ProfileIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f07820" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+      <circle cx="12" cy="7" r="4"/>
+    </svg>
+  )
+}
+
+function BottomNav({ onNavigate }) {
+  const buttonStyle = {
+    background: 'none',
+    border: 'none',
+    padding: 10,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
+  return (
+    <div style={{
+      position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 30,
+      background: '#111111',
+      paddingBottom: 'calc(8px + env(safe-area-inset-bottom))',
+      paddingTop: 12,
+    }}>
+      <div style={{ maxWidth: 430, margin: '0 auto', padding: '0 24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+          <button style={buttonStyle} aria-label="Activity" onClick={() => onNavigate('activity')}><BikeIcon /></button>
+          <button style={buttonStyle} aria-label="Location" onClick={() => onNavigate('location')}><LocationPinIcon /></button>
+          <button style={buttonStyle} aria-label="Settings" onClick={() => onNavigate('settings')}><GearIcon /></button>
+          <button style={buttonStyle} aria-label="Profile"  onClick={() => onNavigate('profile')}><ProfileIcon /></button>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+          <div style={{ width: 134, height: 5, borderRadius: 999, background: 'rgba(240, 240, 240, 0.35)' }} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Sheet ────────────────────────────────────────────────────────────────────
+// Generic bottom sheet. Single instance in App; renders content based on
+// `target` ('activity' | 'location' | 'settings' | 'profile' | null).
+// Drag handle (visual only) + X button close. Overlay tap also closes.
+// No Done button. Slide-up translateY animation, 300ms ease.
+
+const SHEET_TITLES = {
+  activity: 'Activity',
+  location: 'Location',
+  settings: 'Settings',
+  profile:  'Profile',
+}
+
+function XIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M1 1 L13 13 M13 1 L1 13" stroke="#f0f0f0" strokeWidth="1.8" strokeLinecap="round"/>
+    </svg>
+  )
+}
+
+function SubLabel({ children }) {
+  return (
+    <div style={{ fontSize: 11, fontWeight: 500, color: 'rgba(240, 240, 240, 0.35)', marginBottom: 8 }}>
+      {children}
+    </div>
+  )
+}
+
+function PillRow({ items }) {
+  return (
+    <div className="flex gap-2">
+      {items.map(({ label, active, disabled }) => (
+        <div key={label} style={{
+          background: active ? '#f07820' : '#222222',
+          color: active ? '#f0f0f0' : 'rgba(240, 240, 240, 0.35)',
+          opacity: disabled ? 0.6 : 1,
+          borderRadius: 999,
+          fontSize: 13, fontWeight: 500,
+          padding: '8px 14px',
+          flex: 1, textAlign: 'center',
+        }}>
+          {label}
+          {disabled && <div style={{ fontSize: 9, opacity: 0.8, marginTop: 1 }}>soon</div>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ActivitySheetContent() {
   return (
     <>
-      {/* Overlay — starts below the iOS status bar via safe-area-inset-top so the
-           status bar is never covered or dimmed. pointer-events:none ensures no
-           touch interception; the sheet's Done button handles dismissal. */}
-      <div
-        style={{
-          position: 'fixed',
-          top: 'env(safe-area-inset-top)',
-          left: 0, right: 0, bottom: 0,
-          zIndex: 40,
-          background: 'rgba(0,0,0,0.45)',
-          opacity: open ? 1 : 0,
-          pointerEvents: 'none',
-          transition: 'opacity 300ms ease',
-        }}
+      <SubLabel>Sport</SubLabel>
+      <PillRow items={[
+        { label: 'MTB',   active: true              },
+        { label: 'Run',   active: false, disabled: true },
+        { label: 'Hike',  active: false, disabled: true },
+        { label: 'Cycle', active: false, disabled: true },
+      ]}/>
+      <div style={{ height: 22 }} />
+      <SubLabel>Distance</SubLabel>
+      <PillRow items={[
+        { label: '10 mi', active: false },
+        { label: '25 mi', active: true  },
+        { label: '50 mi', active: false },
+      ]}/>
+    </>
+  )
+}
+
+function LocationSheetContent({ locationName, gpsCoords, onSelectLocation, onUseGPS }) {
+  return (
+    <>
+      <div style={{ fontSize: 12, color: 'rgba(240, 240, 240, 0.35)', marginBottom: 10 }}>
+        Currently: <span style={{ color: '#f0f0f0' }}>{locationName}</span>
+      </div>
+      <LocationSearch
+        gpsCoords={gpsCoords}
+        onSelect={onSelectLocation}
+        onUseGPS={onUseGPS}
       />
+    </>
+  )
+}
 
-      {/* Sheet */}
-      <div style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 50,
-        background: '#ffffff',
-        borderRadius: '24px 24px 0 0',
-        padding: '12px 22px 40px',
-        transform: open ? 'translateY(0)' : 'translateY(100%)',
-        transition: 'transform 300ms ease',
-        maxWidth: 430,
-        margin: '0 auto',
-      }}>
-        {/* Drag handle */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-          <div style={{ width: 36, height: 4, borderRadius: 999, background: '#d6d0c4' }} />
-        </div>
+function PlaceholderContent({ label }) {
+  return (
+    <div style={{ fontSize: 13, color: 'rgba(240, 240, 240, 0.35)', padding: '12px 0 24px' }}>
+      {label} coming soon.
+    </div>
+  )
+}
 
-        {/* Location */}
-        <div style={SECTION_LABEL}>Location</div>
-        {searching ? (
-          <LocationSearch
-            gpsCoords={gpsCoords}
-            onSelect={r => { onSelectLocation(r); setSearching(false) }}
-            onUseGPS={() => { onUseGPS(); setSearching(false) }}
-            onClose={() => setSearching(false)}
-          />
-        ) : (
+function Sheet({ target, onClose, locationName, gpsCoords, onSelectLocation, onUseGPS }) {
+  const open = target !== null
+  const title = target ? SHEET_TITLES[target] : ''
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 60,
+        background: 'rgba(0, 0, 0, 0.45)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24,
+        opacity: open ? 1 : 0,
+        pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 180ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#1c1c1c',
+          borderRadius: 24,
+          width: '100%',
+          maxWidth: 380,
+          minHeight: 260,
+          maxHeight: '80vh',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: 24,
+          opacity: open ? 1 : 0,
+          transform: open ? 'scale(1) translateY(0)' : 'scale(0.93) translateY(12px)',
+          transition: 'opacity 180ms ease-out, transform 180ms ease-out',
+          animation: open ? 'islandSpringIn 320ms cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+        }}
+      >
+        {/* Header row: title + X — fixed at top */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexShrink: 0 }}>
+          <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 22, color: '#f0f0f0', lineHeight: 1.1 }}>
+            {title}
+          </div>
           <button
-            onClick={() => setSearching(true)}
+            onClick={onClose}
+            aria-label="Close"
             style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              background: '#f8f6f2', border: '1px solid #ddd8ce',
-              borderRadius: 10, padding: '10px 14px', width: '100%',
-              cursor: 'pointer', fontFamily: "'DM Sans', sans-serif",
+              width: 32, height: 32, borderRadius: '50%',
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
             }}
           >
-            <PinIcon />
-            <span style={{ fontSize: 14, color: '#2c2c1e', fontWeight: 500 }}>{locationName}</span>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#8a8475' }}>Change</span>
+            <XIcon />
           </button>
-        )}
-
-        <div style={DIVIDER} />
-
-        {/* Activity */}
-        <div style={SECTION_LABEL}>Activity</div>
-        <div className="flex gap-2">
-          {[
-            { label: 'MTB',   active: true  },
-            { label: 'Run',   active: false },
-            { label: 'Hike',  active: false },
-            { label: 'Cycle', active: false },
-          ].map(({ label, active }) => (
-            <div key={label} style={{
-              background: active ? '#1e3a5a' : '#d6d0c4',
-              color: active ? '#b5d4f4' : '#8a8475',
-              opacity: active ? 1 : 0.6,
-              borderRadius: 999,
-              fontSize: 13, fontWeight: 500,
-              padding: '7px 14px',
-              flex: 1, textAlign: 'center',
-            }}>
-              {label}
-              {!active && <div style={{ fontSize: 9, opacity: 0.8, marginTop: 1 }}>soon</div>}
-            </div>
-          ))}
         </div>
 
-        <div style={DIVIDER} />
-
-        {/* Distance */}
-        <div style={SECTION_LABEL}>Distance</div>
-        <div className="flex gap-2">
-          {[
-            { label: '10 mi', active: false },
-            { label: '25 mi', active: true  },
-            { label: '50 mi', active: false },
-          ].map(({ label, active }) => (
-            <div key={label} style={{
-              background: active ? '#1e3a5a' : 'transparent',
-              color: active ? '#b5d4f4' : '#5c5a50',
-              border: active ? 'none' : '1px solid #c8c3b8',
-              borderRadius: 999,
-              fontSize: 13, fontWeight: 500,
-              padding: '7px 20px',
-            }}>
-              {label}
-            </div>
-          ))}
+        {/* Scrollable content area */}
+        <div style={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+        }}>
+          {target === 'activity' && <ActivitySheetContent />}
+          {target === 'location' && (
+            <LocationSheetContent
+              locationName={locationName}
+              gpsCoords={gpsCoords}
+              onSelectLocation={onSelectLocation}
+              onUseGPS={onUseGPS}
+            />
+          )}
+          {target === 'settings' && <PlaceholderContent label="Settings" />}
+          {target === 'profile'  && <PlaceholderContent label="Profile" />}
         </div>
-
-        <div style={DIVIDER} />
-
-        {/* Done */}
-        <button
-          onClick={onClose}
-          style={{
-            width: '100%',
-            background: '#2d4a1e',
-            color: '#f5f2eb',
-            border: 'none',
-            borderRadius: 14,
-            padding: '15px',
-            fontSize: 15,
-            fontWeight: 600,
-            fontFamily: "'DM Sans', sans-serif",
-            cursor: 'pointer',
-          }}
-        >
-          Done
-        </button>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -421,9 +566,9 @@ function usAqiLabel(val) {
   if (val == null) return null
   if (val <= 50)  return 'Good'
   if (val <= 100) return 'Moderate'
-  if (val <= 150) return 'Unhealthy for Sensitive'
+  if (val <= 150) return 'Sensitive'
   if (val <= 200) return 'Unhealthy'
-  return 'Very Unhealthy'
+  return 'Very poor'
 }
 
 function formatTime(isoString) {
@@ -903,7 +1048,7 @@ function aqiStatus(label) {
   if (!label || label === '--' || label === 'N/A') return 'Neutral'
   if (label === 'Good') return 'Ideal'
   if (label === 'Moderate') return 'Good'
-  if (label === 'Unhealthy for Sensitive') return 'Marginal'
+  if (label === 'Sensitive') return 'Marginal'
   return 'Blocking'
 }
 
@@ -927,7 +1072,7 @@ function trailMoisture(dryHrs) {
   if (dryHrs == null) return { value: '--', status: 'Neutral' }
   if (dryHrs > 48) return { value: 'Dry',           status: 'Ideal' }
   if (dryHrs > 24) return { value: 'Mostly dry',    status: 'Good' }
-  if (dryHrs > 12) return { value: 'Slightly damp', status: 'Marginal' }
+  if (dryHrs > 12) return { value: 'Light damp', status: 'Marginal' }
   return { value: 'Damp', status: 'Blocking' }
 }
 
@@ -951,11 +1096,11 @@ function uvStatus(val) {
 function uvLabel(val) {
   if (val == null) return '--'
   const n = Math.round(val)
-  if (n <= 2)  return `${n} · Low`
-  if (n <= 5)  return `${n} · Moderate`
-  if (n <= 7)  return `${n} · High`
-  if (n <= 10) return `${n} · Very High`
-  return `${n} · Extreme`
+  if (n <= 2)  return `${n} Low`
+  if (n <= 5)  return `${n} Moderate`
+  if (n <= 7)  return `${n} High`
+  if (n <= 10) return `${n} V.High`
+  return `${n} Extreme`
 }
 
 function windStatus(mph) {
@@ -1004,7 +1149,7 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
     const dryHrs = dryStreakHours != null ? dryStreakHours : (precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48))
     const moisture = trailMoisture(dryHrs)
     const precipValue = precipProb != null
-      ? (precipProb === 0 ? 'Clear' : `${precipProb}% chance rain`)
+      ? (precipProb === 0 ? 'Clear' : `${precipProb}% rain`)
       : (precipToday < 0.01 ? 'Clear' : `${precipToday.toFixed(2)}"`)
     const precipSt = precipProb != null ? precipProbStatus(precipProb) : precipStatus(precipToday)
     return [
@@ -1025,13 +1170,13 @@ function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, current
     const estHrsSinceRain = dryStreakHours != null ? dryStreakHours : Math.max(1, hourOfDay - 2)
     const dryoutHrs = precipToday * 24
     // Figure out rain timing description
-    let rainTiming = 'Rain possible'
+    let rainTiming = 'Rain ahead'
     if (precipToday >= 0.05 && precipToday <= 0.1) rainTiming = 'Light rain'
     else if (precipToday > 0.1 && estHrsSinceRain > dryoutHrs * 0.75) rainTiming = 'Drying out'
     else if (precipToday > 0.1) rainTiming = 'Rain earlier'
 
     return [
-      { icon: '⏱️', name: 'Dry Streak', value: `${Math.round(estHrsSinceRain)} hrs since rain`, status: estHrsSinceRain < 12 ? 'Marginal' : dryStreakStatus(estHrsSinceRain) },
+      { icon: '⏱️', name: 'Dry Streak', value: `${Math.round(estHrsSinceRain)}h dry`, status: estHrsSinceRain < 12 ? 'Marginal' : dryStreakStatus(estHrsSinceRain) },
       { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
       { icon: '🌧️', name: 'Rain Timing', value: rainTiming, status: 'Marginal' },
       { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
@@ -1073,7 +1218,8 @@ export default function App() {
   const [coords,          setCoords]          = useState(null)
   const [locationName,    setLocationName]    = useState('Locating...')
   const [isUsingGPS,      setIsUsingGPS]      = useState(() => localStorage.getItem('rsg_location_mode') !== 'manual')
-  const [sheetOpen,       setSheetOpen]       = useState(false)
+  const [navTarget,       setNavTarget]       = useState(null) // 'activity' | 'location' | 'settings' | 'profile' | null
+  const [tipsOpen,        setTipsOpen]        = useState(false)
 
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [currentTemp,    setCurrentTemp]    = useState(null)
@@ -1404,31 +1550,18 @@ export default function App() {
     <>
       <SplashScreen />
 
-      <div style={{ background: '#f5f2eb', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-10 px-4">
-        <div style={{ maxWidth: 430, padding: '28px 22px 40px' }} className="w-full flex flex-col gap-6">
+      <div style={{ background: '#111111', fontFamily: "'DM Sans', sans-serif" }} className="min-h-screen flex justify-center items-start py-10 px-4">
+        <div style={{ maxWidth: 430, padding: '28px 22px 110px' }} className="w-full flex flex-col gap-6">
 
           {/* Header */}
           <header className="flex items-center justify-between">
-            {/* Left: menu button */}
+            {/* Left: location name (opens Location sheet) */}
             <button
-              onClick={() => setSheetOpen(true)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-              aria-label="Open settings"
-            >
-              <svg width="22" height="18" viewBox="0 0 22 18" fill="none">
-                <rect y="0"    width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                <rect y="7.75" width="16" height="2.5" rx="1.25" fill="#2d4a1e"/>
-                <rect y="15.5" width="22" height="2.5" rx="1.25" fill="#2d4a1e"/>
-              </svg>
-            </button>
-
-            {/* Center: location name */}
-            <button
-              onClick={() => setSheetOpen(true)}
+              onClick={() => setNavTarget('location')}
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', gap: 6 }}
             >
-              <PinIcon color="#5a7a3a" />
-              <span style={{ fontSize: 16, fontWeight: 600, color: '#2c2c1e', fontFamily: "'DM Sans', sans-serif" }}>{locationName}</span>
+              <PinIcon color="#f07820" />
+              <span style={{ fontSize: 16, fontWeight: 600, color: '#f0f0f0', fontFamily: "'DM Sans', sans-serif" }}>{locationName}</span>
             </button>
 
             {/* Right: refresh button with feedback */}
@@ -1440,19 +1573,19 @@ export default function App() {
             >
               {refreshPhase === 'done' ? (
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                  <path d="M3 9.5l4 4 8-8" stroke="#5a7a3a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M3 9.5l4 4 8-8" stroke="#f07820" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               ) : (
                 <svg
                   width="18" height="18" viewBox="0 0 18 18" fill="none"
                   style={{ animation: refreshPhase === 'updating' ? 'spin 0.8s linear infinite' : 'none' }}
                 >
-                  <path d="M15.75 9A6.75 6.75 0 1 1 9.53 2.27L11.25 4" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M9 1.5v3h3" stroke="#2d4a1e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M15.75 9A6.75 6.75 0 1 1 9.53 2.27L11.25 4" stroke="#f0f0f0" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M9 1.5v3h3" stroke="#f0f0f0" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               )}
               {refreshPhase !== 'idle' && (
-                <span style={{ fontSize: 10, color: '#8a8475', fontFamily: "'DM Sans', sans-serif", lineHeight: 1 }}>
+                <span style={{ fontSize: 10, color: 'rgba(240, 240, 240, 0.35)', fontFamily: "'DM Sans', sans-serif", lineHeight: 1 }}>
                   {refreshPhase === 'updating' ? 'Updating…' : 'Updated'}
                 </span>
               )}
@@ -1467,8 +1600,22 @@ export default function App() {
               ? TODAY_LABEL
               : (dailyForecast[selectedDay]?.day ?? DAY_ABBR[(new Date().getDay() + selectedDay) % 7])
             const cardBg = selVerdict === 'caution' ? '#7a4a15' : selVerdict === 'nogo' ? '#5c1a1a' : '#2d4a1e'
+            const verdictChar = selVerdict === 'nogo' ? '✕' : selVerdict === 'caution' ? '!' : '✓'
             return (
-              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', transition: 'background 0.25s ease' }}>
+              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', transition: 'background 0.25s ease' }}>
+                {/* Watermark — large faded verdict glyph behind content */}
+                <div style={{
+                  position: 'absolute', right: -20, bottom: -40,
+                  fontFamily: "'DM Serif Display', serif",
+                  fontSize: 220,
+                  lineHeight: 1,
+                  color: 'rgba(255, 255, 255, 0.06)',
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                }}>
+                  {verdictChar}
+                </div>
+
                 <div style={{
                   position: 'absolute', top: 14, right: 14,
                   background: 'rgba(255,255,255,0.15)',
@@ -1477,7 +1624,7 @@ export default function App() {
                 }}>
                   {selLabel}
                 </div>
-                <div className="flex items-center gap-3 mt-1">
+                <div className="flex items-start gap-3 mt-1" style={{ position: 'relative' }}>
                   <div style={{
                     width: 36, height: 36,
                     background: 'rgba(255,255,255,0.15)',
@@ -1485,13 +1632,14 @@ export default function App() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: '#e8f5d0', fontSize: 18, flexShrink: 0,
                   }}>
-                    {selVerdict === 'nogo' ? '✕' : selVerdict === 'caution' ? '!' : '✓'}
+                    {verdictChar}
                   </div>
-                  <div>
-                    <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 28, color: '#e8f5d0', lineHeight: 1.1 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 36, color: '#f0f0f0', lineHeight: 1.1 }}>
                       {selVerdict === 'nogo' ? 'Stay home.' : selVerdict === 'caution' ? 'Ride with care.' : 'Go ride.'}
                     </div>
-                    <div style={{ color: '#a8c882', fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
+                    <div style={{ height: 1, background: 'rgba(255, 255, 255, 0.18)', margin: '10px 0' }} />
+                    <div style={{ color: 'rgba(240, 240, 240, 0.72)', fontSize: 13, lineHeight: 1.4 }}>
                       {selReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
                     </div>
                   </div>
@@ -1502,9 +1650,6 @@ export default function App() {
 
           {/* Week strip — 7-day outlook */}
           <div>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
-              This week
-            </div>
             <div className="grid grid-cols-7 gap-1" style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
               {Array.from({ length: dailyForecast.length > 0 ? dailyForecast.length : 7 }, (_, i) => {
                 const forecast    = dailyForecast[i]
@@ -1517,19 +1662,18 @@ export default function App() {
                   <div key={i}
                     onClick={() => setSelectedDay(i)}
                     style={{
-                      background: active ? activeBg : '#ffffff',
-                      borderRadius: 14, padding: '12px 4px', textAlign: 'center',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+                      background: active ? activeBg : '#1c1c1c',
+                      borderRadius: 14, padding: '16px 4px 18px', textAlign: 'center',
                       cursor: 'pointer',
                       transition: 'background 0.15s ease',
                     }}
                     className="flex flex-col items-center gap-1"
                   >
-                    <span style={{ fontSize: 10, fontWeight: 500, color: active ? '#a8c882' : '#8a8475', textTransform: 'uppercase' }}>
+                    <span style={{ fontSize: 10, fontWeight: 500, color: active ? 'rgba(240, 240, 240, 0.72)' : 'rgba(240, 240, 240, 0.35)', textTransform: 'uppercase' }}>
                       {displayDay}
                     </span>
                     <StatusDot status={status} />
-                    <span style={{ fontSize: 11, fontWeight: 600, color: active ? '#e8f5d0' : '#3a3a2e' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#f0f0f0' }}>
                       {displayTemp}
                     </span>
                   </div>
@@ -1540,9 +1684,6 @@ export default function App() {
 
           {/* Evidence panel */}
           <div style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
-              Conditions
-            </div>
             <div className="grid grid-cols-3 gap-2">
               {buildEvidenceTiles({
                 // Shift dailyIntervals so [0] always refers to the selected day's data
@@ -1564,52 +1705,80 @@ export default function App() {
                 uvIndex:          selectedDay === 0 ? uvIndexNow   : (dailyIntervals[selectedDay]?.values?.uvIndex   ?? null),
                 windSpeed:        selectedDay === 0 ? windSpeedNow : (dailyIntervals[selectedDay]?.values?.windSpeed ?? null),
                 isToday:          selectedDay === 0,
-              }).map(({ icon, name, value, status }) => (
-                <div key={name} style={{
-                  background: '#ffffff',
-                  borderRadius: 14,
-                  padding: '14px 10px 12px',
-                  boxShadow: tileGlow(status),
-                  textAlign: 'center',
-                }} className="flex flex-col items-center gap-1">
-                  <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
-                  <span style={{ fontSize: 9, fontWeight: 600, color: '#8a8475', textTransform: 'uppercase', letterSpacing: '0.08em', marginTop: 4 }}>{name}</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#2c2c1e', marginTop: 2 }}>{value}</span>
-                </div>
-              ))}
+              }).map(({ icon, name, value, status }) => {
+                const tint =
+                  status === 'Ideal' || status === 'Good' ? 'rgba(76, 175, 106, 0.09)' :
+                  status === 'Marginal'                   ? 'rgba(232, 160, 32, 0.09)' :
+                  status === 'Blocking'                   ? 'rgba(224, 72, 72, 0.09)'  :
+                  null
+                return (
+                  <div key={name} style={{
+                    position: 'relative',
+                    height: 100,
+                    backgroundColor: '#1c1c1c',
+                    backgroundImage: tint ? `linear-gradient(${tint}, ${tint})` : 'none',
+                    borderRadius: 14,
+                    padding: '14px 10px 28px',
+                    textAlign: 'center',
+                  }} className="flex flex-col items-center gap-1">
+                    <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
+                    <span style={{ fontSize: 20, fontWeight: 700, color: '#f0f0f0', marginTop: 6, lineHeight: 1.1 }}>{value}</span>
+                    <span style={{
+                      position: 'absolute',
+                      bottom: 10, left: 0, right: 0,
+                      fontSize: 10, fontWeight: 500,
+                      color: 'rgba(240, 240, 240, 0.35)',
+                      textAlign: 'center',
+                    }}>{name}</span>
+                  </div>
+                )
+              })}
             </div>
             {cacheTimestamp && (
-              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#b8b3a8', fontFamily: "'DM Sans', sans-serif" }}>
+              <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: 'rgba(240, 240, 240, 0.35)', fontFamily: "'DM Sans', sans-serif" }}>
                 {tick >= 0 && cacheAgeLabel(cacheTimestamp)}
               </div>
             )}
           </div>
 
-          {/* Trail tips */}
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: '#8a8475', textTransform: 'uppercase', marginBottom: 10, marginTop: 2 }}>
+          {/* Trail tips trigger — opens the floating island */}
+          <div className="flex justify-center">
+            <button
+              onClick={() => setTipsOpen(true)}
+              style={{
+                background: '#f07820',
+                color: '#f0f0f0',
+                border: 'none',
+                borderRadius: 999,
+                padding: '12px 28px',
+                fontSize: 14,
+                fontWeight: 600,
+                fontFamily: "'DM Sans', sans-serif",
+                cursor: 'pointer',
+              }}
+            >
               Trail tips
-            </div>
-            <div className="flex flex-col gap-2">
-              {(verdict?.weekTips?.[selectedDay] ?? verdict?.tips ?? ['Loading trail conditions…']).map((tip, i) => (
-                <div key={i} style={{ background: '#ffffff', borderRadius: 16, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }} className="flex items-start gap-3">
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#5a7a3a', flexShrink: 0, marginTop: 5 }} />
-                  <span style={{ fontSize: 13, color: '#3a3a2e', lineHeight: 1.5 }}>{tip}</span>
-                </div>
-              ))}
-            </div>
+            </button>
           </div>
 
         </div>
       </div>
 
-      <BottomSheet
-        open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
+      <Sheet
+        target={navTarget}
+        onClose={() => setNavTarget(null)}
         locationName={locationName}
         gpsCoords={coords}
-        onSelectLocation={handleSelectLocation}
-        onUseGPS={handleUseGPS}
+        onSelectLocation={(r) => { handleSelectLocation(r); setNavTarget(null) }}
+        onUseGPS={() => { handleUseGPS(); setNavTarget(null) }}
+      />
+
+      <BottomNav onNavigate={setNavTarget} />
+
+      <TrailTipsIsland
+        open={tipsOpen}
+        tips={verdict?.weekTips?.[selectedDay] ?? verdict?.tips ?? ['Loading trail conditions…']}
+        onClose={() => setTipsOpen(false)}
       />
     </>
   )
