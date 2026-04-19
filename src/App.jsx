@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react'
 import { cacheAgeLabel } from './lib/cache'
 import { fetchWeatherBundle } from './lib/weatherClient'
-import { getPreferences, computeVerdict } from './lib/verdictEngine'
+import { getPreferences, computeVerdict, buildFactors } from './lib/verdictEngine'
 import { NOMINATIM_HEADERS, usStateAbbr } from './lib/geo'
 import SplashScreen from './components/SplashScreen'
 import TrailTipsIsland from './components/TrailTipsIsland'
+import CaveatIsland from './components/CaveatIsland'
 import BottomNav from './components/BottomNav'
 import StatusDot from './components/StatusDot'
 import Sheet from './components/Sheet'
+import VerdictCard from './components/VerdictCard'
+import FactorGrid from './components/FactorGrid'
 import { PinIcon } from './components/icons'
 
 // ─── Data ────────────────────────────────────────────────────────────────────
@@ -75,183 +78,6 @@ function sunDisplay(sunTimes, { forToday = true } = {}) {
   return { icon: '🌅', value: formatTime(today.sunset), label: 'Sunset', status: 'Neutral' }
 }
 
-// ─── Evidence Panel helpers ───────────────────────────────────────────────
-
-function humidityStatus(h) {
-  if (h == null) return 'Neutral'
-  if (h < 60) return 'Ideal'
-  if (h <= 75) return 'Good'
-  if (h <= 85) return 'Marginal'
-  return 'Blocking'
-}
-
-function tempStatus(t) {
-  if (t == null) return 'Neutral'
-  if (t >= 55 && t <= 80) return 'Ideal'
-  if ((t >= 45 && t < 55) || (t > 80 && t <= 90)) return 'Good'
-  if ((t >= 35 && t < 45) || (t > 90 && t <= 95)) return 'Marginal'
-  return 'Blocking'
-}
-
-function aqiStatus(label) {
-  if (!label || label === '--' || label === 'N/A') return 'Neutral'
-  if (label === 'Good') return 'Ideal'
-  if (label === 'Moderate') return 'Good'
-  if (label === 'Sensitive') return 'Marginal'
-  return 'Blocking'
-}
-
-function precipStatus(inches) {
-  if (inches == null) return 'Neutral'
-  if (inches === 0) return 'Ideal'
-  if (inches < 0.05) return 'Good'
-  if (inches <= 0.1) return 'Marginal'
-  return 'Blocking'
-}
-
-function dryStreakStatus(hrs) {
-  if (hrs == null) return 'Neutral'
-  if (hrs > 48) return 'Ideal'
-  if (hrs >= 24) return 'Good'
-  if (hrs >= 12) return 'Marginal'
-  return 'Blocking'
-}
-
-function trailMoisture(dryHrs) {
-  if (dryHrs == null) return { value: '--', status: 'Neutral' }
-  if (dryHrs > 48) return { value: 'Dry',           status: 'Ideal' }
-  if (dryHrs > 24) return { value: 'Mostly dry',    status: 'Good' }
-  if (dryHrs > 12) return { value: 'Light damp', status: 'Marginal' }
-  return { value: 'Damp', status: 'Blocking' }
-}
-
-function precipProbStatus(prob) {
-  if (prob == null) return 'Neutral'
-  if (prob === 0)  return 'Ideal'
-  if (prob < 10)   return 'Good'
-  if (prob < 30)   return 'Marginal'
-  return 'Blocking'
-}
-
-function uvStatus(val) {
-  if (val == null) return 'Neutral'
-  const n = Math.round(val)   // align with uvLabel which also rounds
-  if (n <= 2)  return 'Neutral'
-  if (n <= 5)  return 'Good'
-  if (n <= 7)  return 'Marginal'
-  return 'Blocking'
-}
-
-function uvLabel(val) {
-  if (val == null) return '--'
-  const n = Math.round(val)
-  if (n <= 2)  return `${n} Low`
-  if (n <= 5)  return `${n} Moderate`
-  if (n <= 7)  return `${n} High`
-  if (n <= 10) return `${n} V.High`
-  return `${n} Extreme`
-}
-
-function windStatus(mph) {
-  if (mph == null) return 'Neutral'
-  if (mph <= 8)  return 'Ideal'
-  if (mph <= 15) return 'Good'
-  if (mph <= 25) return 'Marginal'
-  return 'Blocking'
-}
-
-function dryStreakDisplay(hrs) {
-  if (hrs == null) return '--'
-  const days    = hrs / 24
-  const rounded = Math.round(days * 4) / 4
-  // Under 6 hrs (rounded < 0.25) show raw hours; everything else shows as days
-  if (rounded < 0.25) return `${Math.round(hrs)} hrs`
-  const label = rounded === 1 ? 'day' : 'days'
-  // Trim trailing zeros: 2.00 → "2", 1.50 → "1.5", 1.25 → "1.25"
-  const num = rounded % 1 === 0 ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '')
-  return `${num} ${label}`
-}
-
-// dryStreakHours: optional override for the dry-streak tile (passed for future days
-// from the per-day dryStreakHrs computed in computeVerdict). When null/undefined the
-// function falls back to its original same-day estimation logic.
-function buildEvidenceTiles({ todayVerdict, dailyIntervals, currentTemp, currentHumidity, airQuality, sunTimes, precipIntensityNow, dryStreakHours, uvIndex, windSpeed, isToday = true }) {
-  const sun = sunDisplay(sunTimes, { forToday: isToday })
-  const precipToday = dailyIntervals[0]?.values?.precipitationAccumulation ?? 0
-  const precipProb  = dailyIntervals[0]?.values?.precipProbability ?? null
-  const now = new Date()
-  const hourOfDay = now.getHours() + now.getMinutes() / 60
-
-  const rideWindowTile = { icon: sun.icon, name: sun.label, value: sun.value, status: sun.status }
-
-  if (todayVerdict === 'go') {
-    // Use precomputed dry streak for future days; fall back to estimate for today
-    const dryHrs = dryStreakHours != null ? dryStreakHours : (precipToday < 0.01 ? 58 : Math.max(0, (1 - precipToday) * 48))
-    const moisture = trailMoisture(dryHrs)
-    const precipValue = precipProb != null
-      ? (precipProb === 0 ? 'Clear' : `${precipProb}% rain`)
-      : (precipToday < 0.01 ? 'Clear' : `${precipToday.toFixed(2)}"`)
-    const precipSt = precipProb != null ? precipProbStatus(precipProb) : precipStatus(precipToday)
-    return [
-      { icon: '🌤️', name: 'Forecast',       value: precipValue,                                                     status: precipSt },
-      { icon: '🌡️', name: 'Temperature',    value: currentTemp     != null ? `${currentTemp}°F` : '--',             status: tempStatus(currentTemp) },
-      { icon: '💧', name: 'Humidity',        value: currentHumidity != null ? `${currentHumidity}%` : '--',         status: humidityStatus(currentHumidity) },
-      { icon: '⏱️', name: 'Dry Streak',      value: dryStreakDisplay(dryHrs),                                       status: dryStreakStatus(dryHrs) },
-      { icon: '🌱', name: 'Trail Moisture',  value: moisture.value,                                                  status: moisture.status },
-      { icon: '🌿', name: 'Air Quality',     value: airQuality ?? '--',                                              status: aqiStatus(airQuality) },
-      { icon: '🔆', name: 'UV Index',        value: uvLabel(uvIndex),                                                status: uvStatus(uvIndex) },
-      { icon: '💨', name: 'Wind',            value: windSpeed != null ? `${Math.round(windSpeed)} mph` : '--',       status: windStatus(windSpeed) },
-      rideWindowTile,
-    ]
-  }
-
-  if (todayVerdict === 'caution') {
-    // Use precomputed dry streak for future days; fall back to estimate for today
-    const estHrsSinceRain = dryStreakHours != null ? dryStreakHours : Math.max(1, hourOfDay - 2)
-    const dryoutHrs = precipToday * 24
-    // Figure out rain timing description
-    let rainTiming = 'Rain ahead'
-    if (precipToday >= 0.05 && precipToday <= 0.1) rainTiming = 'Light rain'
-    else if (precipToday > 0.1 && estHrsSinceRain > dryoutHrs * 0.75) rainTiming = 'Drying out'
-    else if (precipToday > 0.1) rainTiming = 'Rain earlier'
-
-    return [
-      { icon: '⏱️', name: 'Dry Streak', value: `${Math.round(estHrsSinceRain)}h dry`, status: estHrsSinceRain < 12 ? 'Marginal' : dryStreakStatus(estHrsSinceRain) },
-      { icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) },
-      { icon: '🌧️', name: 'Rain Timing', value: rainTiming, status: 'Marginal' },
-      { icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) },
-      { icon: '🌥️', name: 'Forecast', value: `${precipToday.toFixed(2)}"`, status: precipStatus(precipToday) },
-      rideWindowTile,
-    ]
-  }
-
-  // nogo
-  const dryoutHrs = precipToday * 24
-  // Use precomputed dry streak for future days; fall back to estimate for today
-  const estHrsSinceRain = dryStreakHours != null ? dryStreakHours : Math.max(1, hourOfDay - 2)
-  const hoursLeft = Math.max(0, Math.ceil(dryoutHrs - estHrsSinceRain))
-  const tiles = []
-
-  if (precipToday > 0 || precipIntensityNow > 0) {
-    tiles.push({ icon: '🌧️', name: 'Rainfall', value: precipIntensityNow > 0.1 ? 'Raining now' : `${precipToday.toFixed(2)}"`, status: 'Blocking' })
-  }
-  if (hoursLeft > 0 && precipToday > 0.1) {
-    tiles.push({ icon: '⏳', name: 'Hrs Until Rideable', value: `~${hoursLeft} hrs`, status: 'Blocking' })
-  }
-  tiles.push({ icon: '💧', name: 'Humidity', value: currentHumidity != null ? `${currentHumidity}%` : '--', status: humidityStatus(currentHumidity) })
-  if (precipToday > 0.1) {
-    tiles.push({ icon: '🌧️', name: 'Forecast Rain', value: `${precipToday.toFixed(2)}" today`, status: 'Blocking' })
-  }
-  if (currentTemp != null && currentTemp < 35) {
-    tiles.push({ icon: '🥶', name: 'Temperature', value: `${currentTemp}°F`, status: 'Blocking' })
-  } else {
-    tiles.push({ icon: '🌡️', name: 'Temperature', value: currentTemp != null ? `${currentTemp}°F` : '--', status: tempStatus(currentTemp) })
-  }
-  tiles.push(rideWindowTile)
-
-  return tiles
-}
-
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -260,13 +86,13 @@ export default function App() {
   const [isUsingGPS,      setIsUsingGPS]      = useState(() => localStorage.getItem('rsg_location_mode') !== 'manual')
   const [navTarget,       setNavTarget]       = useState(null) // 'activity' | 'location' | 'settings' | 'profile' | null
   const [tipsOpen,        setTipsOpen]        = useState(false)
+  const [caveatsOpen,     setCaveatsOpen]     = useState(false)
 
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [currentTemp,    setCurrentTemp]    = useState(null)
   const [currentHumidity,setCurrentHumidity]= useState(null)
   const [airQuality,       setAirQuality]       = useState(null)
-  const [weeklyAqiLabels,  setWeeklyAqiLabels]  = useState([])
-  const [uvIndexNow,       setUvIndexNow]       = useState(null)
+  const [weeklyAqi,        setWeeklyAqi]        = useState([])
   const [windSpeedNow,     setWindSpeedNow]     = useState(null)
   const [dailyForecast,    setDailyForecast]    = useState([])
   const [dailyIntervals,   setDailyIntervals]   = useState([])
@@ -355,10 +181,10 @@ export default function App() {
 
     if (aqi) {
       setAirQuality(aqi.airQuality)
-      setWeeklyAqiLabels(aqi.weeklyAqiLabels)
+      setWeeklyAqi(aqi.weeklyAqi)
     } else {
       setAirQuality(null)
-      setWeeklyAqiLabels([])
+      setWeeklyAqi([])
     }
 
     if (sun) {
@@ -369,13 +195,11 @@ export default function App() {
                    ? Math.round(interval.values.temperatureMax) : null,
       })))
       setSunTimes(sun.sunTimes)
-      setUvIndexNow(sun.uvIndexNow)
       setWindSpeedNow(sun.windSpeedNow)
     } else {
       setDailyIntervals([])
       setDailyForecast([])
       setSunTimes([])
-      setUvIndexNow(null)
       setWindSpeedNow(null)
     }
 
@@ -485,15 +309,17 @@ export default function App() {
     if (!dailyIntervals.length) return null
     return computeVerdict({
       dailyIntervals,
-      hourlyIntervals,   // [Problem 1 & 2] for rainfall sum + dryout carryover
+      hourlyIntervals,
       currentTemp,
       currentHumidity,
       weatherCodeNow,
       precipIntensityNow,
       sun: sunDisplay(sunTimes),
-      preferences: userPreferences,  // [PREF] all preference-driven adjustments
+      sunTimes,
+      windSpeedNow,
+      preferences: userPreferences,
     })
-  }, [dailyIntervals, hourlyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes, userPreferences])
+  }, [dailyIntervals, hourlyIntervals, currentTemp, currentHumidity, weatherCodeNow, precipIntensityNow, sunTimes, windSpeedNow, userPreferences])
 
   return (
     <>
@@ -541,61 +367,19 @@ export default function App() {
             </button>
           </header>
 
-          {/* Verdict card — updates to reflect the selected week strip day */}
-          {(() => {
-            const selVerdict = verdict?.weekVerdicts?.[selectedDay] ?? verdict?.todayVerdict
-            const selReason  = verdict?.weekReasons?.[selectedDay]  ?? verdict?.todayReason
-            const selLabel   = selectedDay === 0
+          {/* Verdict card */}
+          <VerdictCard
+            verdict={verdict?.weekVerdicts?.[selectedDay] ?? verdict?.todayVerdict}
+            reason={verdict?.weekReasons?.[selectedDay] ?? verdict?.todayReason}
+            caveats={selectedDay === 0 ? (verdict?.todayCaveats ?? []) : []}
+            hoursUntilSunset={verdict?.hoursUntilSunset}
+            rideWindowEnd={verdict?.rideWindowEnd}
+            label={selectedDay === 0
               ? TODAY_LABEL
-              : (dailyForecast[selectedDay]?.day ?? DAY_ABBR[(new Date().getDay() + selectedDay) % 7])
-            const cardBg = selVerdict === 'caution' ? '#7a4a15' : selVerdict === 'nogo' ? '#5c1a1a' : '#2d4a1e'
-            const verdictChar = selVerdict === 'nogo' ? '✕' : selVerdict === 'caution' ? '!' : '✓'
-            return (
-              <div style={{ background: cardBg, borderRadius: 22, padding: '20px 20px 22px', position: 'relative', overflow: 'hidden', transition: 'background 0.25s ease' }}>
-                {/* Watermark — large faded verdict glyph behind content */}
-                <div style={{
-                  position: 'absolute', right: -20, bottom: -40,
-                  fontFamily: "'DM Serif Display', serif",
-                  fontSize: 220,
-                  lineHeight: 1,
-                  color: 'rgba(255, 255, 255, 0.06)',
-                  pointerEvents: 'none',
-                  userSelect: 'none',
-                }}>
-                  {verdictChar}
-                </div>
-
-                <div style={{
-                  position: 'absolute', top: 14, right: 14,
-                  background: 'rgba(255,255,255,0.15)',
-                  color: '#f0f0f0', borderRadius: 999,
-                  fontSize: 11, fontWeight: 500, padding: '3px 10px',
-                }}>
-                  {selLabel}
-                </div>
-                <div className="flex items-start gap-3 mt-1" style={{ position: 'relative' }}>
-                  <div style={{
-                    width: 36, height: 36,
-                    background: 'rgba(255,255,255,0.15)',
-                    borderRadius: '50%',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#f0f0f0', fontSize: 18, flexShrink: 0,
-                  }}>
-                    {verdictChar}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 36, color: '#f0f0f0', lineHeight: 1.1 }}>
-                      {selVerdict === 'nogo' ? 'Stay home.' : selVerdict === 'caution' ? 'Ride with care.' : 'Go ride.'}
-                    </div>
-                    <div style={{ height: 1, background: 'rgba(255, 255, 255, 0.18)', margin: '10px 0' }} />
-                    <div style={{ color: 'rgba(240, 240, 240, 0.72)', fontSize: 13, lineHeight: 1.4 }}>
-                      {selReason ?? (weatherLoading ? 'Loading conditions…' : 'Checking trail conditions…')}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
+              : (dailyForecast[selectedDay]?.day ?? DAY_ABBR[(new Date().getDay() + selectedDay) % 7])}
+            loading={weatherLoading}
+            onCaveatsClick={() => setCaveatsOpen(true)}
+          />
 
           {/* Week strip — 7-day outlook */}
           <div>
@@ -606,7 +390,7 @@ export default function App() {
                 const displayTemp = forecast?.tempMax != null ? `${forecast.tempMax}°` : '--'
                 const status      = verdict?.weekVerdicts?.[i] ?? 'go'
                 const active      = i === selectedDay
-                const activeBg    = status === 'caution' ? '#7a4a15' : status === 'nogo' ? '#5c1a1a' : '#2d4a1e'
+                const activeBg    = status === 'nogo' ? '#5c1a1a' : '#2d4a1e'
                 return (
                   <div key={i}
                     onClick={() => setSelectedDay(i)}
@@ -631,61 +415,24 @@ export default function App() {
             </div>
           </div>
 
-          {/* Evidence panel */}
+          {/* Factor grid */}
           <div style={{ opacity: weatherLoading ? 0.5 : 1, transition: 'opacity 0.3s ease' }}>
-            <div className="grid grid-cols-3 gap-2">
-              {buildEvidenceTiles({
-                // Shift dailyIntervals so [0] always refers to the selected day's data
-                todayVerdict:     verdict?.weekVerdicts?.[selectedDay] ?? verdict?.todayVerdict ?? 'go',
-                dailyIntervals:   dailyIntervals.slice(selectedDay),
-                // Today: use live current/hourly values; future days: use daily forecast values
-                currentTemp:      selectedDay === 0 ? currentTemp
-                                  : (dailyIntervals[selectedDay]?.values?.temperatureMax != null
-                                      ? Math.round(dailyIntervals[selectedDay].values.temperatureMax) : null),
-                currentHumidity:  selectedDay === 0 ? currentHumidity
-                                  : (dailyIntervals[selectedDay]?.values?.humidity != null
-                                      ? Math.round(dailyIntervals[selectedDay].values.humidity) : null),
-                airQuality:       selectedDay === 0 ? airQuality : (weeklyAqiLabels[selectedDay] ?? 'N/A'),
-                // Slice sunTimes so sunDisplay always reads index [0] as the selected day
-                sunTimes:         sunTimes.slice(selectedDay),
-                precipIntensityNow: selectedDay === 0 ? precipIntensityNow : 0,
-                // Pass precomputed dry streak so future-day tiles show accurate values
-                dryStreakHours:   verdict?.weekDryStreakHrs?.[selectedDay] ?? null,
-                uvIndex:          selectedDay === 0 ? uvIndexNow   : (dailyIntervals[selectedDay]?.values?.uvIndex   ?? null),
-                windSpeed:        selectedDay === 0 ? windSpeedNow : (dailyIntervals[selectedDay]?.values?.windSpeed ?? null),
-                isToday:          selectedDay === 0,
-              }).map(({ icon, name, value, status }) => {
-                const tint =
-                  status === 'Ideal' || status === 'Good' ? 'rgba(76, 175, 106, 0.09)' :
-                  status === 'Marginal'                   ? 'rgba(232, 160, 32, 0.09)' :
-                  status === 'Blocking'                   ? 'rgba(224, 72, 72, 0.09)'  :
-                  null
-                return (
-                  <div key={name} style={{
-                    position: 'relative',
-                    height: 100,
-                    backgroundColor: '#1c1c1c',
-                    backgroundImage: tint ? `linear-gradient(${tint}, ${tint})` : 'none',
-                    borderRadius: 14,
-                    padding: '14px 10px 28px',
-                    textAlign: 'center',
-                  }} className="flex flex-col items-center gap-1">
-                    <span style={{ fontSize: 18, lineHeight: 1 }}>{icon}</span>
-                    <span style={{ fontSize: 20, fontWeight: 700, color: '#f0f0f0', marginTop: 6, lineHeight: 1.1 }}>{value}</span>
-                    <span style={{
-                      position: 'absolute',
-                      bottom: 10, left: 0, right: 0,
-                      fontSize: 10, fontWeight: 500,
-                      color: 'rgba(240, 240, 240, 0.35)',
-                      textAlign: 'center',
-                    }}>{name}</span>
-                  </div>
-                )
-              })}
-            </div>
+            <FactorGrid factors={buildFactors({
+              dryoutPercent:    selectedDay === 0 ? (verdict?.dryoutPercent ?? 100) : 100,
+              precipToday:      dailyIntervals[selectedDay]?.values?.precipitationAccumulation ?? 0,
+              currentTemp:      selectedDay === 0 ? currentTemp
+                                : (dailyIntervals[selectedDay]?.values?.temperatureMax != null
+                                    ? Math.round(dailyIntervals[selectedDay].values.temperatureMax) : null),
+              currentHumidity:  selectedDay === 0 ? currentHumidity
+                                : (dailyIntervals[selectedDay]?.values?.humidity != null
+                                    ? Math.round(dailyIntervals[selectedDay].values.humidity) : null),
+              airQuality:       selectedDay === 0 ? airQuality : (weeklyAqi[selectedDay] ?? null),
+              sunriseTime:      sunTimes[selectedDay]?.sunrise ? formatTime(sunTimes[selectedDay].sunrise) : null,
+              sunsetTime:       sunTimes[selectedDay]?.sunset  ? formatTime(sunTimes[selectedDay].sunset)  : null,
+              hoursUntilSunset: selectedDay === 0 ? (verdict?.hoursUntilSunset ?? null) : null,
+            })} />
             {cacheTimestamp && (
               <div data-tick={tick} style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: 'rgba(240, 240, 240, 0.35)', fontFamily: "'DM Sans', sans-serif" }}>
-                {/* tick read here to trigger re-render every minute */}
                 {cacheAgeLabel(cacheTimestamp)}
               </div>
             )}
@@ -729,6 +476,12 @@ export default function App() {
         open={tipsOpen}
         tips={verdict?.weekTips?.[selectedDay] ?? verdict?.tips ?? ['Loading trail conditions…']}
         onClose={() => setTipsOpen(false)}
+      />
+
+      <CaveatIsland
+        caveats={verdict?.todayCaveats ?? []}
+        open={caveatsOpen}
+        onClose={() => setCaveatsOpen(false)}
       />
     </>
   )

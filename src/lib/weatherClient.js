@@ -10,16 +10,6 @@ import {
   readCache, writeCache, cacheIsValid,
 } from './cache'
 
-// Maps Open-Meteo us_aqi (0–500) to US EPA standard labels
-function usAqiLabel(val) {
-  if (val == null) return null
-  if (val <= 50)  return 'Good'
-  if (val <= 100) return 'Moderate'
-  if (val <= 150) return 'Sensitive'
-  if (val <= 200) return 'Unhealthy'
-  return 'Very poor'
-}
-
 // Parses Tomorrow.io /v4/timelines response → normalized current+hourly object.
 // Returns null if response is missing/malformed.
 function parseTomorrowWeather(raw) {
@@ -70,8 +60,8 @@ function parseOpenMeteoSun(raw) {
   }
 }
 
-// Parses Open-Meteo /v1/air-quality response → current AQI label + per-day noon
-// AQI labels for the 7-day strip.
+// Parses Open-Meteo /v1/air-quality response into raw numeric AQI values.
+// Returns current-hour AQI and per-day noon AQI for the 7-day strip.
 function parseOpenMeteoAqi(raw) {
   if (!raw) return null
   const hourlyTimes = raw?.hourly?.time ?? []
@@ -80,16 +70,15 @@ function parseOpenMeteoAqi(raw) {
   const pad = n => String(n).padStart(2, '0')
   const localHourStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:00`
   const aqiIdx = hourlyTimes.findIndex(t => t === localHourStr)
-  const airQuality = usAqiLabel(aqiIdx >= 0 ? hourlyAqi[aqiIdx] : hourlyAqi[0] ?? null)
-  // Per-day noon AQI for future-day conditions tiles
-  const weeklyAqiLabels = Array.from({ length: 7 }, (_, dayOffset) => {
+  const airQuality = aqiIdx >= 0 ? (hourlyAqi[aqiIdx] ?? null) : (hourlyAqi[0] ?? null)
+  const weeklyAqi = Array.from({ length: 7 }, (_, dayOffset) => {
     const d = new Date()
     d.setDate(d.getDate() + dayOffset)
     const noonStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T12:00`
     const nIdx = hourlyTimes.findIndex(t => t === noonStr)
-    return usAqiLabel(nIdx >= 0 ? hourlyAqi[nIdx] : null)
+    return nIdx >= 0 ? (hourlyAqi[nIdx] ?? null) : null
   })
-  return { airQuality, weeklyAqiLabels }
+  return { airQuality, weeklyAqi }
 }
 
 // Fetches all three weather sources for a coordinate, respecting the cache.
